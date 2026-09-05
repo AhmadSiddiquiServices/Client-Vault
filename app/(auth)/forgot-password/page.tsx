@@ -15,33 +15,63 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!email.trim()) return;
+    if (!email.trim() || isSubmitting) return;
 
-    setIsSubmitting(true);
+    try {
+      setIsSubmitting(true);
+      setError("");
 
-    // Mock request for now.
-    // Backend password reset functionality will be added later.
-    setTimeout(() => {
-      setIsSubmitting(false);
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          email: email.trim(),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || "Unable to process your request.");
+      }
+
       setSubmitted(true);
-    }, 700);
-  };
+    } catch (error) {
+      console.error("Forgot password error:", error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong. Please try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function handleTryAnotherEmail() {
+    setSubmitted(false);
+    setError("");
+    setEmail("");
+  }
 
   return (
     <main className="min-h-screen bg-[var(--background)] text-white">
       <div className="min-h-screen lg:grid lg:grid-cols-[1fr_0.9fr]">
         {/* Left Branding Panel */}
         <section className="relative hidden overflow-hidden border-r border-[var(--border)] bg-[var(--card)] lg:flex lg:min-h-screen lg:flex-col lg:justify-between">
-          {/* Background Glow */}
           <div className="pointer-events-none absolute -left-32 top-1/4 h-80 w-80 rounded-full bg-[var(--primary)]/10 blur-[120px]" />
           <div className="pointer-events-none absolute bottom-0 right-0 h-96 w-96 rounded-full bg-[var(--primary)]/5 blur-[140px]" />
 
           <div className="relative z-10 p-10 xl:p-12">
-            {/* Logo */}
             <Link href="/login" className="inline-flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--primary)]/20 bg-[var(--primary)]/10">
                 <KeyRound className="h-5 w-5 text-[var(--primary)]" />
@@ -128,6 +158,15 @@ export default function ForgotPasswordPage() {
                   </p>
                 </div>
 
+                {/* Error */}
+                {error && (
+                  <div className="mt-5 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-3.5 py-3">
+                    <p className="text-[11px] leading-5 text-red-400">
+                      {error}
+                    </p>
+                  </div>
+                )}
+
                 {/* Form */}
                 <form onSubmit={handleSubmit} className="mt-8 space-y-5">
                   <div>
@@ -149,7 +188,8 @@ export default function ForgotPasswordPage() {
                         placeholder="you@example.com"
                         autoComplete="email"
                         required
-                        className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)]"
+                        disabled={isSubmitting}
+                        className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                   </div>
@@ -199,7 +239,7 @@ export default function ForgotPasswordPage() {
 
                 <button
                   type="button"
-                  onClick={() => setSubmitted(false)}
+                  onClick={handleTryAnotherEmail}
                   className="mt-5 h-11 w-full rounded-lg border border-[var(--border)] px-4 text-[12px] font-medium text-white transition-colors hover:border-[var(--border-hover)] hover:bg-white/[0.03]"
                 >
                   Try another email

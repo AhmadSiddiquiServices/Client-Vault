@@ -4,7 +4,10 @@ import { z } from "zod";
 
 import { requireUser } from "@/lib/auth/require-user";
 import { connectToDatabase } from "@/lib/mongodb";
+import Activity from "@/models/Activity";
 import Client from "@/models/Client";
+import Credential from "@/models/Credential";
+import Project from "@/models/Project";
 
 const updateClientSchema = z
   .object({
@@ -74,7 +77,7 @@ interface RouteContext {
 /**
  * GET /api/clients/[clientId]
  *
- * Returns one client belonging to the authenticated user.
+ * Returns one client and its related overview data.
  */
 export async function GET(request: Request, context: RouteContext) {
   try {
@@ -119,10 +122,111 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
+    /*
+     * Fetch projects and credentials first.
+     */
+    const [projects, credentials] = await Promise.all([
+      Project.find({
+        owner: user._id,
+        client: client._id,
+      })
+        .select("_id name type status description url createdAt updatedAt")
+        .sort({ updatedAt: -1 })
+        .lean(),
+
+      Credential.find({
+        owner: user._id,
+        client: client._id,
+      })
+        .select(
+          "_id name category projects tags isFavorite isShared url username createdAt updatedAt",
+        )
+        .populate("category", "_id name")
+        .populate("projects", "_id name type")
+        .populate("tags", "_id name")
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .lean(),
+    ]);
+
+    const projectIds = projects.map((project) => project._id);
+
+    const credentialIds = credentials.map((credential) => credential._id);
+
+    /*
+     * Fetch activity related to this client,
+     * its projects, and its credentials.
+     */
+    const activityFilters: Record<string, unknown>[] = [
+      {
+        entity: "client",
+        entityId: client._id,
+      },
+    ];
+
+    if (projectIds.length > 0) {
+      activityFilters.push({
+        entity: "project",
+        entityId: {
+          $in: projectIds,
+        },
+      });
+    }
+
+    if (credentialIds.length > 0) {
+      activityFilters.push({
+        entity: "credential",
+        entityId: {
+          $in: credentialIds,
+        },
+      });
+    }
+
+    const activity = await Activity.find({
+      owner: user._id,
+      $or: activityFilters,
+    })
+      .select("_id action entity entityId description createdAt")
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    /*
+     * Count unique credential categories.
+     */
+    const categoryIds = new Set(
+      credentials
+        .map((credential) => {
+          const category = credential.category as
+            | { _id?: unknown }
+            | null
+            | undefined;
+
+          return category?._id?.toString();
+        })
+        .filter(Boolean),
+    );
+
     return NextResponse.json(
       {
         success: true,
+
         client,
+
+        stats: {
+          projects: projects.length,
+          credentials: await Credential.countDocuments({
+            owner: user._id,
+            client: client._id,
+          }),
+          categories: categoryIds.size,
+        },
+
+        projects,
+
+        credentials,
+
+        activity,
       },
       { status: 200 },
     );
@@ -235,7 +339,13 @@ export async function PATCH(request: Request, context: RouteContext) {
 /**
  * DELETE /api/clients/[clientId]
  *
- * Permanently deletes one client belonging to the authenticated user.
+ * Permanently deletes:
+ * - Client
+ * - All client projects
+ * - All client credentials
+ * - All related activity
+ *
+ * Everything happens inside one MongoDB transaction.
  */
 export async function DELETE(request: Request, context: RouteContext) {
   try {
@@ -265,12 +375,171 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     await connectToDatabase();
 
-    const client = await Client.findOneAndDelete({
-      _id: clientId,
-      owner: user._id,
-    }).lean();
+    const session = await mongoose.startSession();
 
-    if (!client) {
+    try {
+      let deletedClientName = "";
+
+      await session.withTransaction(async () => {
+        /**
+         * Verify ownership.
+         */
+        const client = await Client.findOne({
+          _id: clientId,
+          owner: user._id,
+        })
+          .select("_id name")
+          .session(session)
+          .lean();
+
+        if (!client) {
+          throw new ClientNotFoundError();
+        }
+
+        deletedClientName = client.name;
+
+        /**
+         * Collect related project IDs before deletion.
+         */
+        const projects = await Project.find({
+          owner: user._id,
+          client: client._id,
+        })
+          .select("_id")
+          .session(session)
+          .lean();
+
+        const projectIds = projects.map((project) => project._id);
+
+        /**
+         * Collect related credential IDs before deletion.
+         */
+        const credentials = await Credential.find({
+          owner: user._id,
+          client: client._id,
+        })
+          .select("_id")
+          .session(session)
+          .lean();
+
+        const credentialIds = credentials.map((credential) => credential._id);
+
+        /**
+         * Delete related activity.
+         */
+        // await Activity.deleteMany(
+        //   {
+        //     owner: user._id,
+        //     $or: [
+        //       {
+        //         entity: "client",
+        //         entityId: client._id,
+        //       },
+        //       ...(projectIds.length > 0
+        //         ? [
+        //             {
+        //               entity: "project",
+        //               entityId: {
+        //                 $in: projectIds,
+        //               },
+        //             },
+        //           ]
+        //         : []),
+        //       ...(credentialIds.length > 0
+        //         ? [
+        //             {
+        //               entity: "credential",
+        //               entityId: {
+        //                 $in: credentialIds,
+        //               },
+        //             },
+        //           ]
+        //         : []),
+        //     ],
+        //   },
+        //   { session },
+        // );
+        /**
+         * Delete activity related to the client itself.
+         */
+        await Activity.deleteMany({
+          owner: user._id,
+          entity: "client",
+          entityId: client._id,
+        }).session(session);
+
+        /**
+         * Delete activity related to the client's projects.
+         */
+        if (projectIds.length > 0) {
+          await Activity.deleteMany({
+            owner: user._id,
+            entity: "project",
+            entityId: {
+              $in: projectIds,
+            },
+          }).session(session);
+        }
+
+        /**
+         * Delete activity related to the client's credentials.
+         */
+        if (credentialIds.length > 0) {
+          await Activity.deleteMany({
+            owner: user._id,
+            entity: "credential",
+            entityId: {
+              $in: credentialIds,
+            },
+          }).session(session);
+        }
+
+        /**
+         * Delete all credentials belonging to the client.
+         */
+        await Credential.deleteMany(
+          {
+            owner: user._id,
+            client: client._id,
+          },
+          { session },
+        );
+
+        /**
+         * Delete all projects belonging to the client.
+         */
+        await Project.deleteMany(
+          {
+            owner: user._id,
+            client: client._id,
+          },
+          { session },
+        );
+
+        /**
+         * Finally delete the client.
+         */
+        await Client.deleteOne(
+          {
+            _id: client._id,
+            owner: user._id,
+          },
+          { session },
+        );
+      });
+
+      return NextResponse.json(
+        {
+          success: true,
+          message: `Client "${deletedClientName}" deleted successfully.`,
+        },
+        { status: 200 },
+      );
+    } finally {
+      await session.endSession();
+    }
+  } catch (error) {
+    if (error instanceof ClientNotFoundError) {
       return NextResponse.json(
         {
           success: false,
@@ -280,14 +549,6 @@ export async function DELETE(request: Request, context: RouteContext) {
       );
     }
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Client deleted successfully.",
-      },
-      { status: 200 },
-    );
-  } catch (error) {
     console.error("DELETE /api/clients/[clientId] error:", error);
 
     return NextResponse.json(
@@ -297,5 +558,12 @@ export async function DELETE(request: Request, context: RouteContext) {
       },
       { status: 500 },
     );
+  }
+}
+
+class ClientNotFoundError extends Error {
+  constructor() {
+    super("Client not found.");
+    this.name = "ClientNotFoundError";
   }
 }

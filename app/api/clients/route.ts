@@ -3,7 +3,10 @@ import { z } from "zod";
 
 import { connectToDatabase } from "@/lib/mongodb";
 import { requireUser } from "@/lib/auth/require-user";
+
 import Client from "@/models/Client";
+import Project from "@/models/Project";
+import Credential from "@/models/Credential";
 
 const createClientSchema = z.object({
   name: z
@@ -64,6 +67,7 @@ const createClientSchema = z.object({
 
 /**
  * GET /api/clients
+ *
  * Returns clients belonging only to the authenticated user.
  */
 export async function GET(request: Request) {
@@ -99,9 +103,7 @@ export async function GET(request: Request) {
     }
 
     /**
-     * Basic client search.
-     *
-     * Searches across:
+     * Search across:
      * - name
      * - company
      * - contact person
@@ -120,10 +122,39 @@ export async function GET(request: Request) {
 
     const clients = await Client.find(query).sort({ createdAt: -1 }).lean();
 
+    /**
+     * Add project and credential counts.
+     *
+     * We keep ownership checks on every related query so counts can
+     * never include another user's data.
+     */
+    const clientsWithStats = await Promise.all(
+      clients.map(async (client) => {
+        const [projectsCount, credentialsCount] = await Promise.all([
+          Project.countDocuments({
+            owner: user._id,
+            client: client._id,
+          }),
+
+          Credential.countDocuments({
+            owner: user._id,
+            client: client._id,
+          }),
+        ]);
+
+        return {
+          ...client,
+          projectsCount,
+          credentialsCount,
+          lastActivityAt: client.updatedAt,
+        };
+      }),
+    );
+
     return NextResponse.json(
       {
         success: true,
-        clients,
+        clients: clientsWithStats,
       },
       { status: 200 },
     );

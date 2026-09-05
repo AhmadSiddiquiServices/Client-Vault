@@ -3,10 +3,66 @@
 import Link from "next/link";
 import { Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
+  const router = useRouter();
+
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (loading) return;
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setError(
+          data.message || "Unable to sign in. Please check your credentials.",
+        );
+
+        return;
+      }
+
+      /**
+       * The API has already set the HTTP-only session cookie.
+       *
+       * We do NOT store the token in localStorage/sessionStorage.
+       */
+      router.push("/dashboard");
+      router.refresh();
+    } catch (error) {
+      console.error("Login request failed:", error);
+
+      setError(
+        "Something went wrong. Please check your connection and try again.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[var(--background)] text-white">
@@ -82,8 +138,18 @@ export default function LoginPage() {
               </p>
             </div>
 
+            {/* Error */}
+            {error && (
+              <div
+                role="alert"
+                className="mb-5 rounded-lg border border-red-500/20 bg-red-500/5 px-3.5 py-3 text-[11px] leading-5 text-red-400"
+              >
+                {error}
+              </div>
+            )}
+
             {/* Form */}
-            <form className="space-y-5">
+            <form onSubmit={handleSubmit} className="space-y-5">
               {/* Email */}
               <div>
                 <label
@@ -99,7 +165,11 @@ export default function LoginPage() {
                   type="email"
                   autoComplete="email"
                   placeholder="you@example.com"
-                  className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 text-[12px] text-white outline-none placeholder:text-[var(--muted)] transition focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  disabled={loading}
+                  required
+                  className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 text-[12px] text-white outline-none placeholder:text-[var(--muted)] transition focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </div>
 
@@ -128,16 +198,21 @@ export default function LoginPage() {
                     type={showPassword ? "text" : "password"}
                     autoComplete="current-password"
                     placeholder="Enter your password"
-                    className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 pr-11 text-[12px] text-white outline-none placeholder:text-[var(--muted)] transition focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    disabled={loading}
+                    required
+                    className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 pr-11 text-[12px] text-white outline-none placeholder:text-[var(--muted)] transition focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <button
                     type="button"
                     onClick={() => setShowPassword((value) => !value)}
+                    disabled={loading}
                     aria-label={
                       showPassword ? "Hide password" : "Show password"
                     }
-                    className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-[var(--muted)] transition hover:text-white"
+                    className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-[var(--muted)] transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -149,7 +224,8 @@ export default function LoginPage() {
                 <input
                   type="checkbox"
                   checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
+                  onChange={(event) => setRememberMe(event.target.checked)}
+                  disabled={loading}
                   className="h-4 w-4 rounded border-[var(--border)] bg-[var(--card)] accent-[var(--primary)]"
                 />
 
@@ -161,10 +237,20 @@ export default function LoginPage() {
               {/* Submit */}
               <button
                 type="submit"
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] text-[12px] font-semibold text-black transition hover:bg-[var(--primary-hover)]"
+                disabled={loading}
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] text-[12px] font-semibold text-black transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <LockKeyhole size={15} />
-                Sign In
+                {loading ? (
+                  <>
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black" />
+                    Signing in...
+                  </>
+                ) : (
+                  <>
+                    <LockKeyhole size={15} />
+                    Sign In
+                  </>
+                )}
               </button>
             </form>
 

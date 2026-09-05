@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -13,12 +14,17 @@ import {
 } from "lucide-react";
 
 export default function ResetPasswordPage() {
+  const searchParams = useSearchParams();
+
+  const token = searchParams.get("token") ?? "";
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resetComplete, setResetComplete] = useState(false);
+  const [error, setError] = useState("");
 
   const passwordRequirements = useMemo(
     () => ({
@@ -39,34 +45,58 @@ export default function ResetPasswordPage() {
     passwordRequirements.uppercase &&
     passwordRequirements.number;
 
-  const canSubmit = isValidPassword && passwordsMatch;
+  const canSubmit = Boolean(token && isValidPassword && passwordsMatch);
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!canSubmit) return;
+    if (!canSubmit || isSubmitting) return;
 
-    setIsSubmitting(true);
+    try {
+      setIsSubmitting(true);
+      setError("");
 
-    // Mock password reset.
-    // Real token validation + password update will be added with the backend.
-    setTimeout(() => {
-      setIsSubmitting(false);
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          token,
+          password,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || "Unable to reset your password.");
+      }
+
       setResetComplete(true);
-    }, 700);
-  };
+    } catch (error) {
+      console.error("Reset password error:", error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong. Please try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[var(--background)] text-white">
       <div className="min-h-screen lg:grid lg:grid-cols-[1fr_0.9fr]">
         {/* Left Branding Panel */}
         <section className="relative hidden overflow-hidden border-r border-[var(--border)] bg-[var(--card)] lg:flex lg:min-h-screen lg:flex-col lg:justify-between">
-          {/* Background Glow */}
           <div className="pointer-events-none absolute -left-32 top-1/4 h-80 w-80 rounded-full bg-[var(--primary)]/10 blur-[120px]" />
           <div className="pointer-events-none absolute bottom-0 right-0 h-96 w-96 rounded-full bg-[var(--primary)]/5 blur-[140px]" />
 
           <div className="relative z-10 p-10 xl:p-12">
-            {/* Logo */}
             <Link href="/login" className="inline-flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--primary)]/20 bg-[var(--primary)]/10">
                 <KeyRound className="h-5 w-5 text-[var(--primary)]" />
@@ -154,6 +184,25 @@ export default function ResetPasswordPage() {
                   </p>
                 </div>
 
+                {/* Missing Token */}
+                {!token && (
+                  <div className="mt-6 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-4 py-3">
+                    <p className="text-[11px] leading-5 text-red-400">
+                      This password reset link is invalid or missing its reset
+                      token.
+                    </p>
+                  </div>
+                )}
+
+                {/* Error */}
+                {error && (
+                  <div className="mt-5 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-4 py-3">
+                    <p className="text-[11px] leading-5 text-red-400">
+                      {error}
+                    </p>
+                  </div>
+                )}
+
                 {/* Form */}
                 <form onSubmit={handleSubmit} className="mt-8 space-y-5">
                   {/* New Password */}
@@ -175,7 +224,8 @@ export default function ResetPasswordPage() {
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="Enter your new password"
                         autoComplete="new-password"
-                        className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-10 pr-11 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)]"
+                        disabled={!token || isSubmitting}
+                        className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-10 pr-11 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
                       />
 
                       <button
@@ -184,7 +234,8 @@ export default function ResetPasswordPage() {
                         aria-label={
                           showPassword ? "Hide password" : "Show password"
                         }
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)] transition-colors hover:text-white"
+                        disabled={!token || isSubmitting}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)] transition-colors hover:text-white disabled:opacity-50"
                       >
                         {showPassword ? (
                           <EyeOff className="h-4 w-4" />
@@ -194,7 +245,6 @@ export default function ResetPasswordPage() {
                       </button>
                     </div>
 
-                    {/* Requirements */}
                     <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-3">
                       <PasswordRequirement
                         active={passwordRequirements.length}
@@ -232,7 +282,8 @@ export default function ResetPasswordPage() {
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="Confirm your new password"
                         autoComplete="new-password"
-                        className={`h-11 w-full rounded-lg border bg-[var(--card)] pl-10 pr-11 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] ${
+                        disabled={!token || isSubmitting}
+                        className={`h-11 w-full rounded-lg border bg-[var(--card)] pl-10 pr-11 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60 ${
                           confirmPassword.length > 0 && !passwordsMatch
                             ? "border-red-500/50 focus:border-red-500"
                             : "border-[var(--border)] focus:border-[var(--primary)]"
@@ -247,7 +298,8 @@ export default function ResetPasswordPage() {
                             ? "Hide password"
                             : "Show password"
                         }
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)] transition-colors hover:text-white"
+                        disabled={!token || isSubmitting}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)] transition-colors hover:text-white disabled:opacity-50"
                       >
                         {showConfirmPassword ? (
                           <EyeOff className="h-4 w-4" />

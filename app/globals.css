@@ -75,3 +75,17 @@ button {
 ::-webkit-scrollbar-thumb:hover {
   background: #34434d;
 }
+
+@keyframes loader {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  50% {
+    transform: translateX(100%);
+  }
+
+  100% {
+    transform: translateX(220%);
+  }
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Building2,
@@ -12,61 +12,234 @@ import {
   Save,
   User,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 
 type ClientFormProps = {
   mode?: "create" | "edit";
+  clientId?: string;
+};
+
+type ClientStatus = "active" | "inactive" | "archived";
+
+type FormData = {
+  name: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  website: string;
+  address: string;
+  status: "Active" | "Inactive";
+  notes: string;
+};
+
+type ClientApiResponse = {
+  success: boolean;
+  message?: string;
   client?: {
+    _id: string;
     name: string;
-    contactPerson: string;
-    email: string;
-    phone: string;
-    website: string;
-    address: string;
-    status: "Active" | "Inactive";
-    notes: string;
+    company?: string;
+    contactPerson?: string;
+    email?: string;
+    phone?: string;
+    website?: string;
+    address?: string;
+    status: ClientStatus;
+    notes?: string;
   };
 };
 
-const defaultClient = {
+const defaultClient: FormData = {
   name: "",
   contactPerson: "",
   email: "",
   phone: "",
   website: "",
   address: "",
-  status: "Active" as const,
+  status: "Active",
   notes: "",
 };
 
-export function ClientForm({ mode = "create", client }: ClientFormProps) {
-  const [formData, setFormData] = useState(client ?? defaultClient);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+export function ClientForm({ mode = "create", clientId }: ClientFormProps) {
+  const router = useRouter();
 
   const isEdit = mode === "edit";
 
-  const updateField = (field: keyof typeof formData, value: string) => {
+  const [formData, setFormData] = useState<FormData>(defaultClient);
+
+  const [isLoadingClient, setIsLoadingClient] = useState(isEdit);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  /**
+   * Fetch client when editing.
+   */
+  useEffect(() => {
+    if (!isEdit) {
+      setIsLoadingClient(false);
+      return;
+    }
+
+    if (!clientId) {
+      setError("Client ID is missing.");
+      setIsLoadingClient(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchClient() {
+      try {
+        setIsLoadingClient(true);
+        setError("");
+
+        const response = await fetch(`/api/clients/${clientId}`, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        const result: ClientApiResponse = await response.json();
+
+        if (!response.ok || !result.success || !result.client) {
+          throw new Error(result.message || "Failed to load client.");
+        }
+
+        if (cancelled) return;
+
+        setFormData({
+          name: result.client.name || "",
+          contactPerson: result.client.contactPerson || "",
+          email: result.client.email || "",
+          phone: result.client.phone || "",
+          website: result.client.website || "",
+          address: result.client.address || "",
+          status: result.client.status === "inactive" ? "Inactive" : "Active",
+          notes: result.client.notes || "",
+        });
+      } catch (error) {
+        console.error("Fetch client error:", error);
+
+        if (!cancelled) {
+          setError(
+            error instanceof Error ? error.message : "Failed to load client.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingClient(false);
+        }
+      }
+    }
+
+    fetchClient();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, clientId]);
+
+  const updateField = <K extends keyof FormData>(
+    field: K,
+    value: FormData[K],
+  ) => {
     setFormData((prev) => ({
       ...prev,
       [field]: value,
     }));
 
-    setSaved(false);
+    setError("");
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    setIsSaving(true);
-    setSaved(false);
+    if (isSaving) return;
 
-    // Mock save for now.
-    // API/database integration will be added later.
-    setTimeout(() => {
+    if (isEdit && !clientId) {
+      setError("Client ID is missing.");
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      setError("");
+
+      const payload = {
+        name: formData.name.trim(),
+        contactPerson: formData.contactPerson.trim() || undefined,
+        email: formData.email.trim() || undefined,
+        phone: formData.phone.trim() || undefined,
+        website: formData.website.trim() || undefined,
+        address: formData.address.trim() || undefined,
+        status: formData.status.toLowerCase() as "active" | "inactive",
+        notes: formData.notes.trim() || undefined,
+      };
+
+      const endpoint = isEdit ? `/api/clients/${clientId}` : "/api/clients";
+
+      const method = isEdit ? "PATCH" : "POST";
+
+      const response = await fetch(endpoint, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+
+      const result: ClientApiResponse = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(
+          result.message ||
+            (isEdit ? "Failed to update client." : "Failed to create client."),
+        );
+      }
+
+      toast.success(
+        isEdit
+          ? "Client updated successfully."
+          : "Client created successfully.",
+      );
+
+      const targetClientId = result.client?._id || clientId;
+
+      if (targetClientId) {
+        router.push(`/clients/${targetClientId}`);
+      } else {
+        router.push("/clients");
+      }
+
+      router.refresh();
+    } catch (error) {
+      console.error(
+        isEdit ? "Update client error:" : "Create client error:",
+        error,
+      );
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : isEdit
+            ? "Something went wrong while updating the client."
+            : "Something went wrong while creating the client.";
+
+      setError(message);
+      toast.error(message);
+    } finally {
       setIsSaving(false);
-      setSaved(true);
-    }, 700);
-  };
+    }
+  }
+
+  /**
+   * Loading state for edit mode.
+   */
+  if (isLoadingClient) {
+    return <ClientFormSkeleton />;
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1120px]">
@@ -119,12 +292,10 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
         </div>
       </div>
 
-      {/* Saved Message */}
-      {saved && (
-        <div className="mb-5 rounded-lg border border-[var(--primary)]/20 bg-[var(--primary-soft)] px-4 py-3 text-[12px] text-[var(--primary)]">
-          {isEdit
-            ? "Client information has been updated successfully."
-            : "Client has been created successfully."}
+      {/* Error */}
+      {error && (
+        <div className="mb-5 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-4 py-3">
+          <p className="text-[11px] leading-5 text-red-400">{error}</p>
         </div>
       )}
 
@@ -166,6 +337,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                   onChange={(e) => updateField("name", e.target.value)}
                   placeholder="e.g. GumJoy"
                   required
+                  disabled={isSaving}
                   className={inputClass}
                 />
               </FormField>
@@ -175,6 +347,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                   value={formData.contactPerson}
                   onChange={(e) => updateField("contactPerson", e.target.value)}
                   placeholder="e.g. John Smith"
+                  disabled={isSaving}
                   className={inputClass}
                 />
               </FormField>
@@ -185,6 +358,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                   value={formData.email}
                   onChange={(e) => updateField("email", e.target.value)}
                   placeholder="client@example.com"
+                  disabled={isSaving}
                   className={inputClass}
                 />
               </FormField>
@@ -195,6 +369,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                   value={formData.phone}
                   onChange={(e) => updateField("phone", e.target.value)}
                   placeholder="+44 0000 000000"
+                  disabled={isSaving}
                   className={inputClass}
                 />
               </FormField>
@@ -209,6 +384,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                   value={formData.website}
                   onChange={(e) => updateField("website", e.target.value)}
                   placeholder="https://example.com"
+                  disabled={isSaving}
                   className={inputClass}
                 />
               </FormField>
@@ -223,6 +399,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                   onChange={(e) => updateField("address", e.target.value)}
                   placeholder="Enter client address"
                   rows={4}
+                  disabled={isSaving}
                   className={`${inputClass} min-h-[100px] resize-y py-3`}
                 />
               </FormField>
@@ -245,6 +422,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                 onChange={(e) => updateField("notes", e.target.value)}
                 placeholder="Add notes about this client..."
                 rows={6}
+                disabled={isSaving}
                 className={`${inputClass} min-h-[140px] resize-y py-3`}
               />
             </div>
@@ -275,6 +453,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
                 onChange={(e) =>
                   updateField("status", e.target.value as "Active" | "Inactive")
                 }
+                disabled={isSaving}
                 className={inputClass}
               >
                 <option value="Active">Active</option>
@@ -294,8 +473,10 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
             </div>
 
             <div className="space-y-3">
-              <InfoRow label="Projects" value={isEdit ? "2" : "0"} />
-              <InfoRow label="Credentials" value={isEdit ? "18" : "0"} />
+              <InfoRow label="Projects" value="0" />
+
+              <InfoRow label="Credentials" value="0" />
+
               <InfoRow
                 label="Status"
                 value={formData.status}
@@ -321,7 +502,7 @@ export function ClientForm({ mode = "create", client }: ClientFormProps) {
 }
 
 const inputClass =
-  "h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20";
+  "h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 disabled:cursor-not-allowed disabled:opacity-60";
 
 function FormField({
   label,
@@ -371,6 +552,70 @@ function InfoRow({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+function ClientFormSkeleton() {
+  return (
+    <div className="mx-auto w-full max-w-[1120px] animate-pulse">
+      {/* Header */}
+      <div className="mb-6">
+        <div className="mb-4 h-4 w-28 rounded bg-white/[0.05]" />
+
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="h-7 w-36 rounded bg-white/[0.06]" />
+
+            <div className="mt-2 h-3 w-72 rounded bg-white/[0.04]" />
+          </div>
+
+          <div className="flex gap-2">
+            <div className="h-9 w-20 rounded-lg bg-white/[0.04]" />
+            <div className="h-9 w-28 rounded-lg bg-white/[0.06]" />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_320px]">
+        <div className="space-y-5">
+          <SkeletonSection large />
+          <SkeletonSection large={false} />
+        </div>
+
+        <div className="space-y-5">
+          <SkeletonSection large={false} />
+          <SkeletonSection large={false} />
+          <SkeletonSection large={false} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonSection({ large }: { large: boolean }) {
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <div className="h-4 w-32 rounded bg-white/[0.06]" />
+      <div className="mt-2 h-3 w-52 rounded bg-white/[0.04]" />
+
+      <div
+        className={
+          large
+            ? "mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2"
+            : "mt-6 space-y-4"
+        }
+      >
+        {Array.from({ length: large ? 6 : 3 }).map((_, index) => (
+          <div
+            key={index}
+            className={large && index >= 4 ? "sm:col-span-2" : ""}
+          >
+            <div className="mb-2 h-3 w-24 rounded bg-white/[0.04]" />
+            <div className="h-10 w-full rounded-lg bg-white/[0.05]" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

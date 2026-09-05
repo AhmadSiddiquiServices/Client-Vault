@@ -1,16 +1,13 @@
 import { ClientForm } from "@/components/clients/ClientForm";
 
-const mockClient = {
-  name: "GumJoy",
-  contactPerson: "John Smith",
-  email: "enquiries@gumjoy.co.uk",
-  phone: "+44 7377 615576",
-  website: "https://gumjoy.co.uk",
-  address: "38 Lomond Road, M22 5JD\nUnited Kingdom",
-  status: "Active" as const,
-  notes: "Gummies (fruit juice candies) business.",
-};
+interface EditClientPageProps {
+  params: Promise<{
+    clientId: string;
+  }>;
+}
 
-export default async function EditClientPage() {
-  return <ClientForm mode="edit" client={mockClient} />;
+export default async function EditClientPage({ params }: EditClientPageProps) {
+  const { clientId } = await params;
+
+  return <ClientForm mode="edit" clientId={clientId} />;
 }
