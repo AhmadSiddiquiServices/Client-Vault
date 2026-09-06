@@ -1,14 +1,13 @@
 import { TagForm } from "@/components/tags/TagForm";
 
-const mockTag = {
-  name: "production",
-  description:
-    "Used for credentials and projects that are currently running in the production environment.",
-  type: "Environment" as const,
-  color: "#00e676",
-  status: "Active" as const,
+type EditTagPageProps = {
+  params: Promise<{
+    tagId: string;
+  }>;
 };
 
-export default async function EditTagPage() {
-  return <TagForm mode="edit" tag={mockTag} />;
+export default async function EditTagPage({ params }: EditTagPageProps) {
+  const { tagId } = await params;
+
+  return <TagForm mode="edit" tagId={tagId} />;
 }

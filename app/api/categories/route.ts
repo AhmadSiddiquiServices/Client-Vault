@@ -5,18 +5,15 @@ import { requireUser } from "@/lib/auth/require-user";
 import { connectToDatabase } from "@/lib/mongodb";
 import Category from "@/models/Category";
 
-const createCategorySchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1, "Category name is required")
-    .max(100, "Category name must not exceed 100 characters"),
+export const createCategorySchema = z.object({
+  name: z.string().trim().min(1, "Category name is required.").max(100),
 
-  description: z
+  description: z.string().trim().max(500).optional(),
+
+  color: z
     .string()
-    .trim()
-    .max(500, "Category description must not exceed 500 characters")
-    .optional(),
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Invalid category color.")
+    .default("#00e676"),
 });
 
 /**
@@ -46,17 +43,76 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search")?.trim() || "";
 
-    const query: Record<string, unknown> = {
+    const match: Record<string, unknown> = {
       owner: user._id,
     };
 
     if (search) {
       const searchRegex = new RegExp(escapeRegex(search), "i");
 
-      query.name = searchRegex;
+      match.$or = [{ name: searchRegex }, { description: searchRegex }];
     }
 
-    const categories = await Category.find(query).sort({ name: 1 }).lean();
+    const categories = await Category.aggregate([
+      {
+        $match: match,
+      },
+
+      {
+        $lookup: {
+          from: "credentials",
+          let: {
+            categoryId: "$_id",
+            ownerId: "$owner",
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {
+                      $eq: ["$category", "$$categoryId"],
+                    },
+                    {
+                      $eq: ["$owner", "$$ownerId"],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $count: "count",
+            },
+          ],
+          as: "credentialStats",
+        },
+      },
+
+      {
+        $addFields: {
+          credentialsCount: {
+            $ifNull: [
+              {
+                $arrayElemAt: ["$credentialStats.count", 0],
+              },
+              0,
+            ],
+          },
+        },
+      },
+
+      {
+        $project: {
+          credentialStats: 0,
+        },
+      },
+
+      {
+        $sort: {
+          name: 1,
+        },
+      },
+    ]);
 
     return NextResponse.json(
       {

@@ -1,20 +1,16 @@
-import mongoose, { Document, Model, Schema } from "mongoose";
+import mongoose, { Document, Model, Schema, Types } from "mongoose";
 
 export interface ICategory extends Document {
-  owner: mongoose.Types.ObjectId;
-
+  owner: Types.ObjectId;
   name: string;
   description?: string;
-
+  color: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const CategorySchema = new Schema<ICategory>(
   {
-    /**
-     * User who owns this category.
-     */
     owner: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -34,40 +30,24 @@ const CategorySchema = new Schema<ICategory>(
       trim: true,
       maxlength: 500,
     },
+
+    color: {
+      type: String,
+      required: true,
+      default: "#00e676",
+      match: /^#[0-9A-Fa-f]{6}$/,
+    },
   },
   {
     timestamps: true,
   },
 );
 
-/**
- * Category names should be unique for each user.
- *
- * This allows two different users to both have
- * a category called "Hosting", while preventing
- * duplicate "Hosting" categories for the same user.
- */
 CategorySchema.index(
-  {
-    owner: 1,
-    name: 1,
-  },
+  { owner: 1, name: 1 },
   {
     unique: true,
     name: "category_owner_name_unique",
-  },
-);
-
-/**
- * Useful for listing a user's categories.
- */
-CategorySchema.index(
-  {
-    owner: 1,
-    createdAt: -1,
-  },
-  {
-    name: "category_owner_createdAt",
   },
 );
 

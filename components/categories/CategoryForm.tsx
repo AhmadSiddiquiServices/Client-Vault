@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Briefcase,
@@ -10,19 +10,29 @@ import {
   Palette,
   Save,
 } from "lucide-react";
-
-type CategoryStatus = "Active" | "Inactive";
+import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 
 type CategoryFormData = {
   name: string;
   description: string;
   color: string;
-  status: CategoryStatus;
 };
 
 type CategoryFormProps = {
   mode?: "create" | "edit";
-  category?: CategoryFormData;
+  categoryId?: string;
+};
+
+type CategoryResponse = {
+  success: boolean;
+  message?: string;
+  category?: {
+    _id: string;
+    name: string;
+    description?: string;
+    color: string;
+  };
 };
 
 const colors = [
@@ -64,18 +74,65 @@ const defaultCategory: CategoryFormData = {
   name: "",
   description: "",
   color: "#00e676",
-  status: "Active",
 };
 
-export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
-  const [formData, setFormData] = useState<CategoryFormData>(
-    category ?? defaultCategory,
-  );
+export function CategoryForm({
+  mode = "create",
+  categoryId,
+}: CategoryFormProps) {
+  const router = useRouter();
 
+  const [formData, setFormData] = useState<CategoryFormData>(defaultCategory);
+
+  const [isLoading, setIsLoading] = useState(mode === "edit");
   const [isSaving, setIsSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
 
   const isEdit = mode === "edit";
+
+  /*
+   * Load category when editing.
+   */
+  useEffect(() => {
+    if (!isEdit || !categoryId) {
+      setIsLoading(false);
+      return;
+    }
+
+    const loadCategory = async () => {
+      try {
+        setIsLoading(true);
+
+        const response = await fetch(`/api/categories/${categoryId}`, {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        const data: CategoryResponse = await response.json();
+
+        if (!response.ok || !data.success || !data.category) {
+          throw new Error(data.message || "Failed to load category.");
+        }
+
+        setFormData({
+          name: data.category.name ?? "",
+          description: data.category.description ?? "",
+          color: data.category.color ?? "#00e676",
+        });
+      } catch (error) {
+        console.error("Load category error:", error);
+
+        toast.error(
+          error instanceof Error ? error.message : "Failed to load category.",
+        );
+
+        router.push("/categories");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadCategory();
+  }, [categoryId, isEdit, router]);
 
   const updateField = <K extends keyof CategoryFormData>(
     field: K,
@@ -85,27 +142,109 @@ export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
       ...previous,
       [field]: value,
     }));
-
-    setSaved(false);
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!formData.name.trim()) {
+    const name = formData.name.trim();
+    const description = formData.description.trim();
+
+    if (!name) {
+      toast.error("Category name is required.");
       return;
     }
 
-    setIsSaving(true);
-    setSaved(false);
+    try {
+      setIsSaving(true);
 
-    // Mock save for now.
-    // Backend/API integration will be added later.
-    setTimeout(() => {
+      const payload = {
+        name,
+        description: description || undefined,
+        color: formData.color,
+      };
+
+      const endpoint = isEdit
+        ? `/api/categories/${categoryId}`
+        : "/api/categories";
+
+      const method = isEdit ? "PATCH" : "POST";
+
+      const response = await fetch(endpoint, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data: CategoryResponse = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data.message ||
+            (isEdit
+              ? "Failed to update category."
+              : "Failed to create category."),
+        );
+      }
+
+      toast.success(
+        isEdit
+          ? "Category updated successfully."
+          : "Category created successfully.",
+      );
+
+      router.push(
+        isEdit && categoryId ? `/categories/${categoryId}/edit` : "/categories",
+      );
+
+      router.refresh();
+    } catch (error) {
+      console.error(
+        isEdit ? "Update category error:" : "Create category error:",
+        error,
+      );
+
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : isEdit
+            ? "Failed to update category."
+            : "Failed to create category.",
+      );
+    } finally {
       setIsSaving(false);
-      setSaved(true);
-    }, 700);
+    }
   };
+
+  /*
+   * Loading state for edit mode.
+   */
+  if (isLoading) {
+    return (
+      <div className="mx-auto w-full max-w-[1000px]">
+        <div className="mb-6">
+          <div className="h-4 w-36 animate-pulse rounded bg-white/[0.06]" />
+
+          <div className="mt-5">
+            <div className="h-7 w-44 animate-pulse rounded bg-white/[0.06]" />
+            <div className="mt-2 h-4 w-72 animate-pulse rounded bg-white/[0.04]" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_300px]">
+          <div className="h-[420px] animate-pulse rounded-xl border border-[var(--border)] bg-[var(--card)]" />
+
+          <div className="space-y-5">
+            <div className="h-[220px] animate-pulse rounded-xl border border-[var(--border)] bg-[var(--card)]" />
+
+            <div className="h-[150px] animate-pulse rounded-xl border border-[var(--border)] bg-[var(--card)]" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1000px]">
@@ -158,17 +297,7 @@ export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
         </div>
       </div>
 
-      {/* Success */}
-      {saved && (
-        <div className="mb-5 flex items-center gap-2 rounded-lg border border-[var(--primary)]/20 bg-[var(--primary-soft)] px-4 py-3 text-[12px] text-[var(--primary)]">
-          <Check size={15} />
-
-          {isEdit
-            ? "Category has been updated successfully."
-            : "Category has been created successfully."}
-        </div>
-      )}
-
+      {/* Form */}
       <form
         id="category-form"
         onSubmit={handleSubmit}
@@ -176,7 +305,6 @@ export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
       >
         {/* Main */}
         <div className="space-y-5">
-          {/* Basic Information */}
           <section className="rounded-xl border border-[var(--border)] bg-[var(--card)]">
             <div className="border-b border-[var(--border)] px-5 py-4">
               <div className="flex items-center gap-2.5">
@@ -208,6 +336,7 @@ export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
                   onChange={(event) => updateField("name", event.target.value)}
                   placeholder="e.g. Hosting"
                   required
+                  maxLength={100}
                   className={inputClass}
                 />
               </FormField>
@@ -221,16 +350,22 @@ export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
                   }
                   placeholder="Describe what this category is used for..."
                   rows={5}
+                  maxLength={500}
                   className={`${inputClass} min-h-[120px] resize-y py-3`}
                 />
               </FormField>
 
-              {/* Color */}
+              {/* Color - presentation only */}
               <div>
                 <label className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted)]">
                   <Palette size={14} />
                   Category Color
                 </label>
+
+                <p className="mb-3 text-[10px] leading-5 text-[var(--muted)]">
+                  This color is used only for the category&apos;s visual
+                  presentation.
+                </p>
 
                 <div className="flex flex-wrap gap-2">
                   {colors.map((color) => {
@@ -319,36 +454,6 @@ export function CategoryForm({ mode = "create", category }: CategoryFormProps) {
             </div>
           </section>
 
-          {/* Status */}
-          <section className="rounded-xl border border-[var(--border)] bg-[var(--card)]">
-            <div className="border-b border-[var(--border)] px-5 py-4">
-              <h2 className="text-[14px] font-semibold text-white">
-                Category Status
-              </h2>
-
-              <p className="mt-0.5 text-[11px] text-[var(--muted)]">
-                Control whether this category is available.
-              </p>
-            </div>
-
-            <div className="p-5">
-              <label className="mb-2 block text-[11px] font-medium text-[var(--muted)]">
-                Status
-              </label>
-
-              <select
-                value={formData.status}
-                onChange={(event) =>
-                  updateField("status", event.target.value as CategoryStatus)
-                }
-                className={inputClass}
-              >
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-              </select>
-            </div>
-          </section>
-
           {/* Information */}
           <div className="rounded-xl border border-[var(--border)] bg-[var(--card)]/60 p-4">
             <p className="text-[11px] font-medium text-white">
@@ -374,8 +479,8 @@ function FormField({
 }: {
   label: string;
   required?: boolean;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
+  icon?: ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div>

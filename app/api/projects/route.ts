@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth/require-user";
 import { connectToDatabase } from "@/lib/mongodb";
 import Client from "@/models/Client";
 import Project from "@/models/Project";
+import mongoose from "mongoose";
 
 const createProjectSchema = z.object({
   client: z.string().trim().min(1, "Client is required"),
@@ -53,14 +54,7 @@ const createProjectSchema = z.object({
 
 /**
  * GET /api/projects
- *
  * Returns projects belonging to the authenticated user.
- *
- * Supported query parameters:
- * - search
- * - client
- * - status
- * - type
  */
 export async function GET(request: Request) {
   try {
@@ -89,10 +83,26 @@ export async function GET(request: Request) {
       owner: user._id,
     };
 
+    /*
+     * Validate client ID before using it in MongoDB.
+     */
     if (clientId) {
+      if (!mongoose.isValidObjectId(clientId)) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid client ID.",
+          },
+          { status: 400 },
+        );
+      }
+
       query.client = clientId;
     }
 
+    /*
+     * Status filter.
+     */
     if (
       status &&
       ["active", "inactive", "completed", "archived"].includes(status)
@@ -100,6 +110,9 @@ export async function GET(request: Request) {
       query.status = status;
     }
 
+    /*
+     * Project type filter.
+     */
     if (
       type &&
       [
@@ -116,6 +129,9 @@ export async function GET(request: Request) {
       query.type = type;
     }
 
+    /*
+     * Search project name and description.
+     */
     if (search) {
       const searchRegex = new RegExp(escapeRegex(search), "i");
 
@@ -123,7 +139,7 @@ export async function GET(request: Request) {
     }
 
     const projects = await Project.find(query)
-      .populate("client", "name company")
+      .populate("client", "_id name company")
       .sort({ createdAt: -1 })
       .lean();
 

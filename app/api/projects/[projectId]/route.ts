@@ -65,6 +65,9 @@ interface RouteContext {
 
 /**
  * GET /api/projects/[projectId]
+ *
+ * Returns one project with its related credentials
+ * and recent activity.
  */
 export async function GET(request: Request, context: RouteContext) {
   try {
@@ -94,11 +97,14 @@ export async function GET(request: Request, context: RouteContext) {
 
     await connectToDatabase();
 
+    /*
+     * Fetch the project and verify ownership.
+     */
     const project = await Project.findOne({
       _id: projectId,
       owner: user._id,
     })
-      .populate("client", "name company")
+      .populate("client", "_id name company")
       .lean();
 
     if (!project) {
@@ -111,10 +117,96 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
+    /*
+     * Credentials attached to this project.
+     *
+     * A credential can belong to one or multiple projects,
+     * so we query the projects array.
+     */
+    const credentials = await Credential.find({
+      owner: user._id,
+      client: project.client._id,
+      projects: project._id,
+    })
+      .select(
+        "_id name category projects tags isFavorite isShared username url createdAt updatedAt",
+      )
+      .populate("category", "_id name")
+      .populate("tags", "_id name")
+      .sort({ updatedAt: -1 })
+      .limit(10)
+      .lean();
+
+    /*
+     * Project-specific activity.
+     */
+    const credentialIds = credentials.map((credential) => credential._id);
+
+    const activityFilters: Record<string, unknown>[] = [
+      {
+        entity: "project",
+        entityId: project._id,
+      },
+    ];
+
+    if (credentialIds.length > 0) {
+      activityFilters.push({
+        entity: "credential",
+        entityId: {
+          $in: credentialIds,
+        },
+      });
+    }
+
+    const activity = await Activity.find({
+      owner: user._id,
+      $or: activityFilters,
+    })
+      .select("_id action entity entityId description createdAt")
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    /*
+     * Count all credentials attached to this project.
+     */
+    const credentialsCount = await Credential.countDocuments({
+      owner: user._id,
+      client: project.client._id,
+      projects: project._id,
+    });
+
+    /*
+     * Count unique categories used by the project's
+     * credentials.
+     */
+    const categoryIds = new Set(
+      credentials
+        .map((credential) => {
+          const category = credential.category as
+            | { _id?: unknown }
+            | null
+            | undefined;
+
+          return category?._id?.toString();
+        })
+        .filter(Boolean),
+    );
+
     return NextResponse.json(
       {
         success: true,
+
         project,
+
+        stats: {
+          credentials: credentialsCount,
+          categories: categoryIds.size,
+        },
+
+        credentials,
+
+        activity,
       },
       { status: 200 },
     );
@@ -210,12 +302,56 @@ export async function PATCH(request: Request, context: RouteContext) {
       }
     }
 
-    const update: Record<string, unknown> = {
-      ...updateData,
-    };
+    // const update: Record<string, unknown> = {
+    //   ...updateData,
+    // };
+
+    // if (clientId) {
+    //   update.client = clientId;
+    // }
+
+    // const project = await Project.findOneAndUpdate(
+    //   {
+    //     _id: projectId,
+    //     owner: user._id,
+    //   },
+    //   {
+    //     $set: update,
+    //   },
+    //   {
+    //     new: true,
+    //     runValidators: true,
+    //   },
+    // )
+    //   .populate("client", "name company")
+    //   .lean();
+
+    const setData: Record<string, unknown> = {};
+    const unsetData: Record<string, 1> = {};
+
+    for (const [key, value] of Object.entries(updateData)) {
+      if (value === undefined || value === "") {
+        unsetData[key] = 1;
+      } else {
+        setData[key] = value;
+      }
+    }
 
     if (clientId) {
-      update.client = clientId;
+      setData.client = clientId;
+    }
+
+    const updateOperation: {
+      $set?: Record<string, unknown>;
+      $unset?: Record<string, 1>;
+    } = {};
+
+    if (Object.keys(setData).length > 0) {
+      updateOperation.$set = setData;
+    }
+
+    if (Object.keys(unsetData).length > 0) {
+      updateOperation.$unset = unsetData;
     }
 
     const project = await Project.findOneAndUpdate(
@@ -223,9 +359,7 @@ export async function PATCH(request: Request, context: RouteContext) {
         _id: projectId,
         owner: user._id,
       },
-      {
-        $set: update,
-      },
+      updateOperation,
       {
         new: true,
         runValidators: true,

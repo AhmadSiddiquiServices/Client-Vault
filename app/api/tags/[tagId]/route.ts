@@ -7,18 +7,13 @@ import { connectToDatabase } from "@/lib/mongodb";
 import Credential from "@/models/Credential";
 import Tag from "@/models/Tag";
 
-const updateTagSchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, "Tag name is required")
-      .max(50, "Tag name must not exceed 50 characters")
-      .optional(),
-  })
-  .refine((data) => Object.keys(data).length > 0, {
-    message: "At least one field is required.",
-  });
+const updateTagSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Tag name is required")
+    .max(50, "Tag name must not exceed 50 characters"),
+});
 
 interface RouteContext {
   params: Promise<{
@@ -145,7 +140,9 @@ export async function PATCH(request: Request, context: RouteContext) {
           owner: user._id,
         },
         {
-          $set: result.data,
+          $set: {
+            name: result.data.name,
+          },
         },
         {
           new: true,

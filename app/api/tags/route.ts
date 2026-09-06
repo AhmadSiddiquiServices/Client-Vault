@@ -40,17 +40,76 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search")?.trim() || "";
 
-    const query: Record<string, unknown> = {
+    const match: Record<string, unknown> = {
       owner: user._id,
     };
 
     if (search) {
       const searchRegex = new RegExp(escapeRegex(search), "i");
 
-      query.name = searchRegex;
+      match.name = searchRegex;
     }
 
-    const tags = await Tag.find(query).sort({ name: 1 }).lean();
+    const tags = await Tag.aggregate([
+      {
+        $match: match,
+      },
+
+      {
+        $lookup: {
+          from: "credentials",
+          let: {
+            tagId: "$_id",
+            ownerId: "$owner",
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {
+                      $eq: ["$owner", "$$ownerId"],
+                    },
+                    {
+                      $in: ["$$tagId", "$tags"],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $count: "count",
+            },
+          ],
+          as: "usageStats",
+        },
+      },
+
+      {
+        $addFields: {
+          usage: {
+            $ifNull: [
+              {
+                $arrayElemAt: ["$usageStats.count", 0],
+              },
+              0,
+            ],
+          },
+        },
+      },
+
+      {
+        $project: {
+          usageStats: 0,
+        },
+      },
+
+      {
+        $sort: {
+          name: 1,
+        },
+      },
+    ]);
 
     return NextResponse.json(
       {

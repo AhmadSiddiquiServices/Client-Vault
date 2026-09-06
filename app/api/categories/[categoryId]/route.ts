@@ -7,24 +7,16 @@ import { connectToDatabase } from "@/lib/mongodb";
 import Category from "@/models/Category";
 import Credential from "@/models/Credential";
 
-const updateCategorySchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, "Category name is required")
-      .max(100, "Category name must not exceed 100 characters")
-      .optional(),
+export const updateCategorySchema = z.object({
+  name: z.string().trim().min(1, "Category name is required.").max(100),
 
-    description: z
-      .string()
-      .trim()
-      .max(500, "Category description must not exceed 500 characters")
-      .optional(),
-  })
-  .refine((data) => Object.keys(data).length > 0, {
-    message: "At least one field is required.",
-  });
+  description: z.string().trim().max(500).optional(),
+
+  color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Invalid category color.")
+    .optional(),
+});
 
 interface RouteContext {
   params: Promise<{
@@ -145,14 +137,45 @@ export async function PATCH(request: Request, context: RouteContext) {
     await connectToDatabase();
 
     try {
+      const updateData: {
+        name: string;
+        description?: string;
+        color?: string;
+      } = {
+        name: result.data.name,
+      };
+
+      if (result.data.description) {
+        updateData.description = result.data.description;
+      }
+
+      if (result.data.color) {
+        updateData.color = result.data.color;
+      }
+
+      const updateOperation: {
+        $set: typeof updateData;
+        $unset?: {
+          description: string;
+        };
+      } = {
+        $set: updateData,
+      };
+
+      if (!updateData.description) {
+        delete updateOperation.$set.description;
+
+        updateOperation.$unset = {
+          description: "",
+        };
+      }
+
       const category = await Category.findOneAndUpdate(
         {
           _id: categoryId,
           owner: user._id,
         },
-        {
-          $set: result.data,
-        },
+        updateOperation,
         {
           new: true,
           runValidators: true,

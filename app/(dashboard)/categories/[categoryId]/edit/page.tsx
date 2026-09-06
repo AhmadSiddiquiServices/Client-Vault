@@ -1,13 +1,15 @@
 import { CategoryForm } from "@/components/categories/CategoryForm";
 
-const mockCategory = {
-  name: "E-Commerce",
-  description:
-    "Credentials related to online stores, e-commerce platforms and store administration.",
-  color: "#00e676",
-  status: "Active" as const,
+type EditCategoryPageProps = {
+  params: Promise<{
+    categoryId: string;
+  }>;
 };
 
-export default async function EditCategoryPage() {
-  return <CategoryForm mode="edit" category={mockCategory} />;
+export default async function EditCategoryPage({
+  params,
+}: EditCategoryPageProps) {
+  const { categoryId } = await params;
+
+  return <CategoryForm mode="edit" categoryId={categoryId} />;
 }
