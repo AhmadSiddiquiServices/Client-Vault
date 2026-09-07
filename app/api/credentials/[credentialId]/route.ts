@@ -61,7 +61,9 @@ interface RouteContext {
 /**
  * GET /api/credentials/[credentialId]
  *
- * Secret values are deliberately excluded.
+ * Secret values are deliberately excluded from the response.
+ * The encrypted secret is selected server-side only so we can
+ * expose a boolean `hasSecret` flag to the frontend.
  */
 export async function GET(request: Request, context: RouteContext) {
   try {
@@ -95,6 +97,16 @@ export async function GET(request: Request, context: RouteContext) {
       _id: credentialId,
       owner: user._id,
     })
+      /*
+       * `secret` is select:false in the schema.
+       *
+       * We explicitly select it here ONLY on the server so
+       * we can determine whether this credential contains
+       * a stored secret.
+       *
+       * The encrypted value is never returned directly.
+       */
+      .select("+secret")
       .populate("client", "name company")
       .populate("projects", "name type status")
       .populate("category", "name")
@@ -111,6 +123,9 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
+    /*
+     * Record that the credential was viewed.
+     */
     await Activity.create({
       owner: user._id,
       action: "viewed",
@@ -119,14 +134,28 @@ export async function GET(request: Request, context: RouteContext) {
       description: `Viewed credential "${credential.name}"`,
     });
 
+    /*
+     * Sanitize the credential so sensitive encrypted
+     * values are not exposed to the frontend.
+     */
     const safeCredential = sanitizeCredential(
       credential as unknown as Record<string, unknown>,
     );
 
+    /*
+     * Add only a boolean indicating whether a secret exists.
+     *
+     * The actual encrypted secret is NOT included.
+     */
+    const credentialResponse = {
+      ...safeCredential,
+      hasSecret: Boolean((credential as unknown as { secret?: string }).secret),
+    };
+
     return NextResponse.json(
       {
         success: true,
-        credential: safeCredential,
+        credential: credentialResponse,
       },
       { status: 200 },
     );
