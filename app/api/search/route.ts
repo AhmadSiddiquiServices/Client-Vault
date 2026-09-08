@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import mongoose from "mongoose";
 
 import { requireUser } from "@/lib/auth/require-user";
 import { connectToDatabase } from "@/lib/mongodb";
@@ -8,6 +9,52 @@ import Client from "@/models/Client";
 import Credential from "@/models/Credential";
 import Project from "@/models/Project";
 import Tag from "@/models/Tag";
+
+type PopulatedSearchProject = {
+  _id: mongoose.Types.ObjectId;
+  name: string;
+  type?: string;
+  status?: string;
+  url?: string;
+  updatedAt: Date;
+  client: {
+    _id: mongoose.Types.ObjectId;
+    name: string;
+    company?: string;
+  } | null;
+};
+
+type PopulatedSearchCredential = {
+  _id: mongoose.Types.ObjectId;
+  name: string;
+  username?: string;
+  url?: string;
+  isFavorite: boolean;
+  isShared: boolean;
+  updatedAt: Date;
+
+  client: {
+    _id: mongoose.Types.ObjectId;
+    name: string;
+    company?: string;
+  } | null;
+
+  projects: Array<{
+    _id: mongoose.Types.ObjectId;
+    name: string;
+    type?: string;
+  }>;
+
+  category: {
+    _id: mongoose.Types.ObjectId;
+    name: string;
+  } | null;
+
+  tags: Array<{
+    _id: mongoose.Types.ObjectId;
+    name: string;
+  }>;
+};
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -29,38 +76,104 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
 
-    const q = searchParams.get("q")?.trim() || "";
+    const rawQuery = searchParams.get("q")?.trim() || "";
 
-    if (!q) {
-      return NextResponse.json({
-        success: true,
-        query: "",
-        results: {
-          clients: [],
-          projects: [],
-          credentials: [],
-          categories: [],
-          tags: [],
+    if (!rawQuery) {
+      return NextResponse.json(
+        {
+          success: true,
+          query: "",
+          results: {
+            clients: [],
+            projects: [],
+            credentials: [],
+            categories: [],
+            tags: [],
+          },
+          total: 0,
         },
-        total: 0,
-      });
+        { status: 200 },
+      );
     }
 
-    /**
-     * Prevent unnecessarily expensive/unbounded searches.
+    /*
+     * Keep the query bounded.
      */
-    const query = q.slice(0, 100);
+    const query = rawQuery.slice(0, 100);
 
     const regex = new RegExp(escapeRegex(query), "i");
 
     await connectToDatabase();
 
-    /**
-     * Run all independent searches in parallel.
+    /*
+     * ------------------------------------------------
+     * First resolve related records.
+     *
+     * This allows credential searches to match things
+     * like:
+     *
+     * "GumJoy"
+     * "Shopify"
+     * "Production"
+     *
+     * even when those values live in referenced
+     * collections.
+     * ------------------------------------------------
      */
+
+    const [
+      matchingClients,
+      matchingProjects,
+      matchingCategories,
+      matchingTags,
+    ] = await Promise.all([
+      Client.find({
+        owner: user._id,
+        $or: [
+          { name: regex },
+          { company: regex },
+          { contactPerson: regex },
+          { email: regex },
+        ],
+      })
+        .select("_id")
+        .limit(20)
+        .lean(),
+
+      Project.find({
+        owner: user._id,
+        $or: [{ name: regex }, { description: regex }, { type: regex }],
+      })
+        .select("_id")
+        .limit(20)
+        .lean(),
+
+      Category.find({
+        owner: user._id,
+        $or: [{ name: regex }, { description: regex }],
+      })
+        .select("_id")
+        .limit(20)
+        .lean(),
+
+      Tag.find({
+        owner: user._id,
+        name: regex,
+      })
+        .select("_id")
+        .limit(20)
+        .lean(),
+    ]);
+
+    /*
+     * ------------------------------------------------
+     * Run actual result searches in parallel.
+     * ------------------------------------------------
+     */
+
     const [clients, projects, credentials, categories, tags] =
       await Promise.all([
-        /**
+        /*
          * Clients
          */
         Client.find({
@@ -77,12 +190,12 @@ export async function GET(request: Request) {
           .limit(5)
           .lean(),
 
-        /**
+        /*
          * Projects
          */
         Project.find({
           owner: user._id,
-          $or: [{ name: regex }, { description: regex }],
+          $or: [{ name: regex }, { description: regex }, { type: regex }],
         })
           .select("name type status client url updatedAt")
           .populate("client", "name company")
@@ -90,19 +203,77 @@ export async function GET(request: Request) {
           .limit(5)
           .lean(),
 
-        /**
+        /*
          * Credentials
          *
          * IMPORTANT:
-         * No secret/custom secret values are searched.
+         *
+         * Never search or return:
+         * - secret
+         * - custom secret values
          */
         Credential.find({
           owner: user._id,
           $or: [
+            /*
+             * Direct credential fields.
+             */
             { name: regex },
             { username: regex },
             { url: regex },
             { notes: regex },
+
+            /*
+             * Credential belongs to a matching client.
+             */
+            ...(matchingClients.length > 0
+              ? [
+                  {
+                    client: {
+                      $in: matchingClients.map((item) => item._id),
+                    },
+                  },
+                ]
+              : []),
+
+            /*
+             * Credential belongs to a matching project.
+             */
+            ...(matchingProjects.length > 0
+              ? [
+                  {
+                    projects: {
+                      $in: matchingProjects.map((item) => item._id),
+                    },
+                  },
+                ]
+              : []),
+
+            /*
+             * Credential uses a matching category.
+             */
+            ...(matchingCategories.length > 0
+              ? [
+                  {
+                    category: {
+                      $in: matchingCategories.map((item) => item._id),
+                    },
+                  },
+                ]
+              : []),
+
+            /*
+             * Credential uses a matching tag.
+             */
+            ...(matchingTags.length > 0
+              ? [
+                  {
+                    tags: {
+                      $in: matchingTags.map((item) => item._id),
+                    },
+                  },
+                ]
+              : []),
           ],
         })
           .select(
@@ -116,19 +287,19 @@ export async function GET(request: Request) {
           .limit(5)
           .lean(),
 
-        /**
+        /*
          * Categories
          */
         Category.find({
           owner: user._id,
-          name: regex,
+          $or: [{ name: regex }, { description: regex }],
         })
-          .select("name description updatedAt")
+          .select("name description color updatedAt")
           .sort({ name: 1 })
           .limit(5)
           .lean(),
 
-        /**
+        /*
          * Tags
          */
         Tag.find({
@@ -141,24 +312,123 @@ export async function GET(request: Request) {
           .lean(),
       ]);
 
+    /*
+     * ------------------------------------------------
+     * Convert results into a clean frontend shape.
+     * ------------------------------------------------
+     */
+
+    const safeClients = clients.map((client) => ({
+      _id: String(client._id),
+      name: client.name,
+      company: client.company ?? "",
+      contactPerson: client.contactPerson ?? "",
+      email: client.email ?? "",
+      status: client.status,
+      updatedAt: client.updatedAt,
+    }));
+
+    const safeProjects = (projects as unknown as PopulatedSearchProject[]).map(
+      (project) => ({
+        _id: String(project._id),
+        name: project.name,
+        type: project.type,
+        status: project.status,
+        url: project.url ?? "",
+        client: project.client
+          ? {
+              _id: String(project.client._id),
+              name: project.client.name,
+              company: project.client.company ?? "",
+            }
+          : null,
+        updatedAt: project.updatedAt,
+      }),
+    );
+
+    const safeCredentials = (
+      credentials as unknown as PopulatedSearchCredential[]
+    ).map((credential) => ({
+      _id: String(credential._id),
+
+      name: credential.name,
+
+      username: credential.username ?? "",
+
+      url: credential.url ?? "",
+
+      isFavorite: Boolean(credential.isFavorite),
+
+      isShared: Boolean(credential.isShared),
+
+      client: credential.client
+        ? {
+            _id: String(credential.client._id),
+            name: credential.client.name,
+            company: credential.client.company ?? "",
+          }
+        : null,
+
+      projects: Array.isArray(credential.projects)
+        ? credential.projects.map((project) => ({
+            _id: String(project._id),
+            name: project.name,
+            type: project.type,
+          }))
+        : [],
+
+      category: credential.category
+        ? {
+            _id: String(credential.category._id),
+            name: credential.category.name,
+          }
+        : null,
+
+      tags: Array.isArray(credential.tags)
+        ? credential.tags.map((tag) => ({
+            _id: String(tag._id),
+            name: tag.name,
+          }))
+        : [],
+
+      updatedAt: credential.updatedAt,
+    }));
+
+    const safeCategories = categories.map((category) => ({
+      _id: String(category._id),
+      name: category.name,
+      description: category.description ?? "",
+      color: category.color ?? "#00e676",
+      updatedAt: category.updatedAt,
+    }));
+
+    const safeTags = tags.map((tag) => ({
+      _id: String(tag._id),
+      name: tag.name,
+      updatedAt: tag.updatedAt,
+    }));
+
     const total =
-      clients.length +
-      projects.length +
-      credentials.length +
-      categories.length +
-      tags.length;
+      safeClients.length +
+      safeProjects.length +
+      safeCredentials.length +
+      safeCategories.length +
+      safeTags.length;
 
     return NextResponse.json(
       {
         success: true,
+
         query,
+
         results: {
-          clients,
-          projects,
-          credentials,
-          categories,
-          tags,
+          clients: safeClients,
+          projects: safeProjects,
+          credentials: safeCredentials,
+          categories: safeCategories,
+          tags: safeTags,
         },
+
         total,
       },
       { status: 200 },

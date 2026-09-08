@@ -757,24 +757,6 @@ Password: ${data.value}`;
         </div>
       </div>
 
-      {/* Security Banner */}
-      <div className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--primary-soft)]">
-          <ShieldCheck size={16} className="text-[var(--primary)]" />
-        </div>
-
-        <div>
-          <p className="text-[12px] font-medium text-white">
-            Secure credential
-          </p>
-
-          <p className="mt-0.5 text-[11px] text-[var(--muted)]">
-            Sensitive values are hidden by default. Only reveal them when
-            necessary.
-          </p>
-        </div>
-      </div>
-
       {/* Main Content */}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         {/* Left */}
@@ -950,7 +932,7 @@ Password: ${data.value}`;
 
             <div className="px-5 py-4">
               {credential.notes ? (
-                <p className="whitespace-pre-wrap text-[12px] leading-6 text-[var(--muted)]">
+                <p className="whitespace-pre-wrap text-[14px] leading-6 text-[var(--muted)]">
                   {credential.notes}
                 </p>
               ) : (

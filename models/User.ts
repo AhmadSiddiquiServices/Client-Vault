@@ -4,7 +4,12 @@ export interface IUser extends Document {
   name: string;
   email: string;
   passwordHash: string;
-  avatarUrl?: string;
+
+  profileImage?: {
+    data: Buffer;
+    contentType: string;
+  };
+
   isActive: boolean;
   lastLoginAt?: Date | null;
 
@@ -38,10 +43,15 @@ const UserSchema = new Schema<IUser>(
       select: false,
     },
 
-    avatarUrl: {
-      type: String,
-      trim: true,
-      maxlength: 500,
+    profileImage: {
+      data: {
+        type: Buffer,
+      },
+
+      contentType: {
+        type: String,
+        enum: ["image/jpeg", "image/png", "image/webp"],
+      },
     },
 
     isActive: {

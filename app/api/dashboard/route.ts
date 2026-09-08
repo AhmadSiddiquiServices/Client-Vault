@@ -4,9 +4,13 @@ import { requireUser } from "@/lib/auth/require-user";
 import { connectToDatabase } from "@/lib/mongodb";
 
 import Activity from "@/models/Activity";
+import Category from "@/models/Category";
 import Client from "@/models/Client";
 import Credential from "@/models/Credential";
 import Project from "@/models/Project";
+import Tag from "@/models/Tag";
+
+export const runtime = "nodejs";
 
 export async function GET() {
   try {
@@ -24,67 +28,97 @@ export async function GET() {
 
     await connectToDatabase();
 
-    /**
-     * Run independent dashboard queries in parallel.
+    const ownerId = user._id;
+
+    /*
+     * ----------------------------------------
+     * Dashboard counts
+     * ----------------------------------------
      */
-    const [
-      clientCount,
-      projectCount,
-      credentialCount,
-      recentCredentials,
-      recentActivity,
-    ] = await Promise.all([
-      /**
-       * Total clients.
-       */
+    const [clientCount, projectCount, credentialCount] = await Promise.all([
       Client.countDocuments({
-        owner: user._id,
+        owner: ownerId,
       }),
 
-      /**
-       * Total projects.
-       */
       Project.countDocuments({
-        owner: user._id,
+        owner: ownerId,
       }),
 
-      /**
-       * Total credentials.
-       */
       Credential.countDocuments({
-        owner: user._id,
+        owner: ownerId,
       }),
+    ]);
 
-      /**
-       * Most recently updated credentials.
-       *
-       * Secret is excluded automatically because
-       * Credential.secret has select:false.
-       */
-      Credential.find({
-        owner: user._id,
+    /*
+     * ----------------------------------------
+     * Recent Credentials
+     *
+     * Explicit model imports above ensure that
+     * all populate targets are registered before
+     * Mongoose attempts population.
+     * ----------------------------------------
+     */
+    let recentCredentials;
+
+    try {
+      recentCredentials = await Credential.find({
+        owner: ownerId,
       })
         .select(
           "name client projects category tags isFavorite isShared updatedAt createdAt",
         )
-        .populate("client", "name company")
-        .populate("projects", "name type")
-        .populate("category", "name")
-        .populate("tags", "name")
-        .sort({ updatedAt: -1 })
+        .populate({
+          path: "client",
+          select: "name company",
+          model: Client,
+        })
+        .populate({
+          path: "projects",
+          select: "name type status",
+          model: Project,
+        })
+        .populate({
+          path: "category",
+          select: "name color",
+          model: Category,
+        })
+        .populate({
+          path: "tags",
+          select: "name",
+          model: Tag,
+        })
+        .sort({
+          updatedAt: -1,
+        })
         .limit(5)
-        .lean(),
+        .lean();
+    } catch (error) {
+      console.error("Dashboard recent credentials query failed:", error);
 
-      /**
-       * Most recent activity.
-       */
-      Activity.find({
-        owner: user._id,
+      throw error;
+    }
+
+    /*
+     * ----------------------------------------
+     * Recent Activity
+     * ----------------------------------------
+     */
+    let recentActivity;
+
+    try {
+      recentActivity = await Activity.find({
+        owner: ownerId,
       })
-        .sort({ createdAt: -1 })
+        .sort({
+          createdAt: -1,
+        })
         .limit(10)
-        .lean(),
-    ]);
+        .lean();
+    } catch (error) {
+      console.error("Dashboard recent activity query failed:", error);
+
+      throw error;
+    }
 
     return NextResponse.json(
       {
@@ -108,7 +142,10 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to fetch dashboard data.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch dashboard data.",
       },
       { status: 500 },
     );

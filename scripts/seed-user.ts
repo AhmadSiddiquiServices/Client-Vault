@@ -2,7 +2,9 @@ import "dotenv/config";
 
 import { connectToDatabase } from "../lib/mongodb";
 import User from "../models/User";
+import Settings from "../models/Settings";
 import { hashPassword } from "../lib/auth/password";
+import { DEFAULT_SETTINGS } from "../lib/settings/default-settings";
 
 async function seedUser() {
   try {
@@ -29,6 +31,22 @@ async function seedUser() {
         `User already exists for ${normalizedEmail}. No new user created.`,
       );
 
+      // Make sure the existing user also has Settings.
+      const existingSettings = await Settings.findOne({
+        user: existingUser._id,
+      });
+
+      if (!existingSettings) {
+        await Settings.create({
+          user: existingUser._id,
+          ...DEFAULT_SETTINGS,
+        });
+
+        console.log("Default ClientVault settings created for existing user.");
+      } else {
+        console.log("Settings already exist for existing user.");
+      }
+
       return;
     }
 
@@ -41,9 +59,15 @@ async function seedUser() {
       isActive: true,
     });
 
+    await Settings.create({
+      user: user._id,
+      ...DEFAULT_SETTINGS,
+    });
+
     console.log("Initial ClientVault user created successfully.");
     console.log(`User ID: ${user._id.toString()}`);
     console.log(`Email: ${user.email}`);
+    console.log("Default ClientVault settings created successfully.");
   } catch (error) {
     console.error("Failed to seed user:", error);
     process.exitCode = 1;

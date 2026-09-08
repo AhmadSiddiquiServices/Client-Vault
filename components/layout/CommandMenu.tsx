@@ -5,6 +5,7 @@ import {
   Command,
   FolderKanban,
   KeyRound,
+  Loader2,
   Search,
   Tag,
   Users,
@@ -13,188 +14,89 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+type SearchType = "Client" | "Project" | "Credential" | "Category" | "Tag";
+
 type SearchItem = {
   id: string;
   name: string;
   description: string;
-  type: "Client" | "Project" | "Credential" | "Category" | "Tag";
+  type: SearchType;
   href: string;
 };
 
-const searchItems: SearchItem[] = [
-  // Clients
-  {
-    id: "client-1",
-    name: "GumJoy",
-    description: "enquiries@gumjoy.co.uk",
-    type: "Client",
-    href: "/clients/1",
-  },
-  {
-    id: "client-2",
-    name: "Wilder Side of Sports",
-    description: "Sports & media client",
-    type: "Client",
-    href: "/clients/2",
-  },
-  {
-    id: "client-3",
-    name: "SyncSurge Agency",
-    description: "Digital agency client",
-    type: "Client",
-    href: "/clients/3",
-  },
-  {
-    id: "client-4",
-    name: "Afrosmile Backpackers",
-    description: "Travel & hospitality client",
-    type: "Client",
-    href: "/clients/4",
-  },
+type SearchClient = {
+  _id: string;
+  name: string;
+  company?: string;
+  contactPerson?: string;
+  email?: string;
+};
 
-  // Projects
-  {
-    id: "project-1",
-    name: "GumJoy E-Commerce Website",
-    description: "GumJoy • Shopify Store",
-    type: "Project",
-    href: "/projects/1",
-  },
-  {
-    id: "project-2",
-    name: "GumJoy Marketing",
-    description: "GumJoy • Marketing",
-    type: "Project",
-    href: "/projects/2",
-  },
-  {
-    id: "project-3",
-    name: "SyncSurge Website",
-    description: "SyncSurge Agency • Website",
-    type: "Project",
-    href: "/projects/3",
-  },
-  {
-    id: "project-4",
-    name: "Wilder Sports Store",
-    description: "Wilder Side of Sports • Website",
-    type: "Project",
-    href: "/projects/4",
-  },
+type SearchProject = {
+  _id: string;
+  name: string;
+  type?: string;
+  status?: string;
+  client?: {
+    _id: string;
+    name: string;
+    company?: string;
+  } | null;
+};
 
-  // Credentials
-  {
-    id: "credential-1",
-    name: "Shopify Admin",
-    description: "GumJoy • E-Commerce",
-    type: "Credential",
-    href: "/credentials/cred-1",
-  },
-  {
-    id: "credential-2",
-    name: "Cloudinary",
-    description: "GumJoy • Storage / Media",
-    type: "Credential",
-    href: "/credentials/cred-2",
-  },
-  {
-    id: "credential-3",
-    name: "Google Analytics",
-    description: "GumJoy • Analytics",
-    type: "Credential",
-    href: "/credentials/cred-3",
-  },
-  {
-    id: "credential-4",
-    name: "GitHub - Main Account",
-    description: "GumJoy • Development",
-    type: "Credential",
-    href: "/credentials/cred-4",
-  },
-  {
-    id: "credential-5",
-    name: "Cloudflare",
-    description: "GumJoy • Domain / DNS",
-    type: "Credential",
-    href: "/credentials/cred-6",
-  },
-  {
-    id: "credential-6",
-    name: "Vercel",
-    description: "SyncSurge Agency • Hosting",
-    type: "Credential",
-    href: "/credentials/cred-7",
-  },
+type SearchCredential = {
+  _id: string;
+  name: string;
+  username?: string;
+  url?: string;
+  isFavorite: boolean;
+  isShared: boolean;
+  client?: {
+    _id: string;
+    name: string;
+    company?: string;
+  } | null;
+  projects: {
+    _id: string;
+    name: string;
+    type?: string;
+  }[];
+  category?: {
+    _id: string;
+    name: string;
+  } | null;
+  tags: {
+    _id: string;
+    name: string;
+  }[];
+};
 
-  // Categories
-  {
-    id: "category-1",
-    name: "E-Commerce",
-    description: "Online stores and e-commerce platforms",
-    type: "Category",
-    href: "/categories/1",
-  },
-  {
-    id: "category-2",
-    name: "Development",
-    description: "Development and source control",
-    type: "Category",
-    href: "/categories/2",
-  },
-  {
-    id: "category-3",
-    name: "Hosting",
-    description: "Hosting and deployment services",
-    type: "Category",
-    href: "/categories/3",
-  },
-  {
-    id: "category-4",
-    name: "Database",
-    description: "Database and data services",
-    type: "Category",
-    href: "/categories/4",
-  },
+type SearchCategory = {
+  _id: string;
+  name: string;
+  description?: string;
+};
 
-  // Tags
-  {
-    id: "tag-1",
-    name: "production",
-    description: "Environment",
-    type: "Tag",
-    href: "/tags/1",
-  },
-  {
-    id: "tag-2",
-    name: "admin",
-    description: "Access",
-    type: "Tag",
-    href: "/tags/2",
-  },
-  {
-    id: "tag-3",
-    name: "shopify",
-    description: "Technology",
-    type: "Tag",
-    href: "/tags/3",
-  },
-  {
-    id: "tag-4",
-    name: "wordpress",
-    description: "Technology",
-    type: "Tag",
-    href: "/tags/4",
-  },
-  {
-    id: "tag-5",
-    name: "development",
-    description: "Technology",
-    type: "Tag",
-    href: "/tags/5",
-  },
-];
+type SearchTag = {
+  _id: string;
+  name: string;
+};
 
-const typeOrder: SearchItem["type"][] = [
+type SearchResponse = {
+  success: boolean;
+  message?: string;
+  query: string;
+  total: number;
+  results: {
+    clients: SearchClient[];
+    projects: SearchProject[];
+    credentials: SearchCredential[];
+    categories: SearchCategory[];
+    tags: SearchTag[];
+  };
+};
+
+const typeOrder: SearchType[] = [
   "Client",
   "Project",
   "Credential",
@@ -202,30 +104,37 @@ const typeOrder: SearchItem["type"][] = [
   "Tag",
 ];
 
-function getTypeIcon(type: SearchItem["type"]) {
+function getTypeIcon(type: SearchType) {
   switch (type) {
     case "Client":
       return Users;
+
     case "Project":
       return FolderKanban;
+
     case "Credential":
       return KeyRound;
+
     case "Category":
     case "Tag":
       return Tag;
   }
 }
 
-function getTypeColor(type: SearchItem["type"]) {
+function getTypeColor(type: SearchType) {
   switch (type) {
     case "Client":
       return "text-blue-400 bg-blue-400/10";
+
     case "Project":
       return "text-purple-400 bg-purple-400/10";
+
     case "Credential":
       return "text-[var(--primary)] bg-[var(--primary-soft)]";
+
     case "Category":
       return "text-orange-400 bg-orange-400/10";
+
     case "Tag":
       return "text-cyan-400 bg-cyan-400/10";
   }
@@ -237,13 +146,25 @@ export const openCommandMenu = () => {
 
 export function CommandMenu() {
   const [open, setOpen] = useState(false);
+
   const [query, setQuery] = useState("");
 
-  // Keyboard shortcut
+  const [items, setItems] = useState<SearchItem[]>([]);
+
+  const [isLoading, setIsLoading] = useState(false);
+
+  const [error, setError] = useState<string | null>(null);
+
+  /*
+   * ----------------------------------------
+   * Keyboard Shortcut
+   * ----------------------------------------
+   */
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+
         setOpen((current) => !current);
       }
 
@@ -259,7 +180,11 @@ export function CommandMenu() {
     };
   }, []);
 
-  // Open from Header search button
+  /*
+   * ----------------------------------------
+   * Open from Header
+   * ----------------------------------------
+   */
   useEffect(() => {
     const handleOpen = () => {
       setOpen(true);
@@ -272,43 +197,124 @@ export function CommandMenu() {
     };
   }, []);
 
-  // Lock page scroll while open
+  /*
+   * ----------------------------------------
+   * Reset when closed
+   * ----------------------------------------
+   */
   useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
+    if (!open) {
+      setQuery("");
+
+      setItems([]);
+
+      setError(null);
+
+      setIsLoading(false);
+
       document.body.style.overflow = "";
+
+      return;
     }
+
+    document.body.style.overflow = "hidden";
 
     return () => {
       document.body.style.overflow = "";
     };
   }, [open]);
 
-  const filteredItems = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-
-    if (!normalizedQuery) {
-      return searchItems;
+  /*
+   * ----------------------------------------
+   * Search API
+   *
+   * Debounced by 250ms.
+   * ----------------------------------------
+   */
+  useEffect(() => {
+    if (!open) {
+      return;
     }
 
-    return searchItems.filter((item) => {
-      return (
-        item.name.toLowerCase().includes(normalizedQuery) ||
-        item.description.toLowerCase().includes(normalizedQuery) ||
-        item.type.toLowerCase().includes(normalizedQuery)
-      );
-    });
-  }, [query]);
+    const normalizedQuery = query.trim();
 
+    if (!normalizedQuery) {
+      setItems([]);
+
+      setError(null);
+
+      setIsLoading(false);
+
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const timeout = window.setTimeout(async () => {
+      try {
+        setIsLoading(true);
+
+        setError(null);
+
+        const params = new URLSearchParams();
+
+        params.set("q", normalizedQuery);
+
+        const response = await fetch(`/api/search?${params.toString()}`, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        const data: SearchResponse = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Failed to search.");
+        }
+
+        setItems(transformSearchResults(data));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        console.error("Global search error:", error);
+
+        setItems([]);
+
+        setError(error instanceof Error ? error.message : "Failed to search.");
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeout);
+
+      controller.abort();
+    };
+  }, [query, open]);
+
+  /*
+   * ----------------------------------------
+   * Group Results
+   * ----------------------------------------
+   */
   const groupedItems = useMemo(() => {
     return typeOrder
       .map((type) => ({
         type,
-        items: filteredItems.filter((item) => item.type === type),
+        items: items.filter((item) => item.type === type),
       }))
       .filter((group) => group.items.length > 0);
-  }, [filteredItems]);
+  }, [items]);
+
+  const closeMenu = () => {
+    setOpen(false);
+  };
 
   if (!open) {
     return null;
@@ -336,9 +342,16 @@ export function CommandMenu() {
             className="h-14 min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-[var(--muted)]"
           />
 
+          {isLoading && (
+            <Loader2
+              size={15}
+              className="shrink-0 animate-spin text-[var(--muted)]"
+            />
+          )}
+
           <button
             type="button"
-            onClick={() => setOpen(false)}
+            onClick={closeMenu}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)] transition-colors hover:text-white"
           >
             <X size={14} />
@@ -347,21 +360,67 @@ export function CommandMenu() {
 
         {/* Results */}
         <div className="max-h-[60vh] overflow-y-auto p-2">
-          {groupedItems.length === 0 ? (
+          {/* Initial state */}
+          {!query.trim() && !isLoading && (
             <div className="px-6 py-12 text-center">
               <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--background)] text-[var(--muted)]">
                 <Search size={17} />
               </div>
 
               <p className="mt-3 text-[12px] font-medium text-white">
-                No results found
+                Search your vault
               </p>
 
               <p className="mt-1 text-[11px] text-[var(--muted)]">
-                Try searching for a client, project, credential or tag.
+                Search clients, projects, credentials, categories and tags.
               </p>
             </div>
-          ) : (
+          )}
+
+          {/* Loading */}
+          {query.trim() && isLoading && items.length === 0 && (
+            <SearchSkeleton />
+          )}
+
+          {/* Error */}
+          {error && !isLoading && (
+            <div className="px-6 py-12 text-center">
+              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 text-red-400">
+                <Search size={17} />
+              </div>
+
+              <p className="mt-3 text-[12px] font-medium text-white">
+                Search failed
+              </p>
+
+              <p className="mt-1 text-[11px] text-[var(--muted)]">{error}</p>
+            </div>
+          )}
+
+          {/* No Results */}
+          {query.trim() &&
+            !isLoading &&
+            !error &&
+            groupedItems.length === 0 && (
+              <div className="px-6 py-12 text-center">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--background)] text-[var(--muted)]">
+                  <Search size={17} />
+                </div>
+
+                <p className="mt-3 text-[12px] font-medium text-white">
+                  No results found
+                </p>
+
+                <p className="mt-1 text-[11px] text-[var(--muted)]">
+                  Try searching for a client, project, credential, category or
+                  tag.
+                </p>
+              </div>
+            )}
+
+          {/* Results */}
+          {!error &&
+            groupedItems.length > 0 &&
             groupedItems.map((group) => (
               <div key={group.type} className="mb-2 last:mb-0">
                 <div className="px-3 pb-1.5 pt-2 text-[10px] font-medium uppercase tracking-wider text-[var(--muted)]">
@@ -370,13 +429,14 @@ export function CommandMenu() {
 
                 {group.items.map((item) => {
                   const Icon = getTypeIcon(item.type);
+
                   const iconColor = getTypeColor(item.type);
 
                   return (
                     <Link
                       key={item.id}
                       href={item.href}
-                      onClick={() => setOpen(false)}
+                      onClick={closeMenu}
                       className="group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-white/[0.04]"
                     >
                       <div
@@ -407,14 +467,14 @@ export function CommandMenu() {
                   );
                 })}
               </div>
-            ))
-          )}
+            ))}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-2.5">
           <div className="flex items-center gap-2 text-[10px] text-[var(--muted)]">
             <Command size={12} />
+
             <span>Quick Search</span>
           </div>
 
@@ -427,6 +487,166 @@ export function CommandMenu() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------
+   Transform API Results
+----------------------------------------- */
+
+function transformSearchResults(data: SearchResponse): SearchItem[] {
+  const items: SearchItem[] = [];
+
+  /*
+   * Clients
+   */
+  data.results.clients.forEach((client) => {
+    items.push({
+      id: `client-${client._id}`,
+
+      name: client.name,
+
+      description:
+        client.company || client.email || client.contactPerson || "Client",
+
+      type: "Client",
+
+      href: `/clients/${client._id}`,
+    });
+  });
+
+  /*
+   * Projects
+   */
+  data.results.projects.forEach((project) => {
+    const clientName = project.client?.name;
+
+    const type = formatProjectType(project.type);
+
+    items.push({
+      id: `project-${project._id}`,
+
+      name: project.name,
+
+      description: [clientName, type].filter(Boolean).join(" • "),
+
+      type: "Project",
+
+      href: `/projects/${project._id}`,
+    });
+  });
+
+  /*
+   * Credentials
+   */
+  data.results.credentials.forEach((credential) => {
+    const parts = [credential.client?.name, credential.category?.name].filter(
+      Boolean,
+    );
+
+    if (credential.projects.length > 0) {
+      parts.push(credential.projects[0].name);
+    }
+
+    items.push({
+      id: `credential-${credential._id}`,
+
+      name: credential.name,
+
+      description: parts.join(" • ") || "Credential",
+
+      type: "Credential",
+
+      href: `/credentials/${credential._id}`,
+    });
+  });
+
+  /*
+   * Categories
+   */
+  data.results.categories.forEach((category) => {
+    items.push({
+      id: `category-${category._id}`,
+
+      name: category.name,
+
+      description: category.description || "Credential category",
+
+      type: "Category",
+
+      /*
+       * There is no category detail
+       * page in the current structure,
+       * so navigate to the category
+       * management page.
+       */
+      href: "/categories",
+    });
+  });
+
+  /*
+   * Tags
+   */
+  data.results.tags.forEach((tag) => {
+    items.push({
+      id: `tag-${tag._id}`,
+
+      name: tag.name,
+
+      description: "Credential tag",
+
+      type: "Tag",
+
+      href: "/tags",
+    });
+  });
+
+  return items;
+}
+
+/* ----------------------------------------
+   Project Type
+----------------------------------------- */
+
+function formatProjectType(value?: string) {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/* ----------------------------------------
+   Search Skeleton
+----------------------------------------- */
+
+function SearchSkeleton() {
+  return (
+    <div className="space-y-1">
+      <div className="px-3 pb-1.5 pt-2">
+        <div className="h-2.5 w-16 animate-pulse rounded bg-white/[0.05]" />
+      </div>
+
+      {Array.from({ length: 5 }).map((_, index) => (
+        <div
+          key={index}
+          className="flex items-center gap-3 rounded-lg px-3 py-2.5"
+        >
+          <div className="h-8 w-8 shrink-0 animate-pulse rounded-lg bg-white/[0.05]" />
+
+          <div className="min-w-0 flex-1">
+            <div className="h-3 w-32 animate-pulse rounded bg-white/[0.05]" />
+
+            <div className="mt-2 h-2.5 w-48 max-w-full animate-pulse rounded bg-white/[0.035]" />
+          </div>
+
+          <div className="h-2.5 w-14 animate-pulse rounded bg-white/[0.04]" />
+        </div>
+      ))}
     </div>
   );
 }
