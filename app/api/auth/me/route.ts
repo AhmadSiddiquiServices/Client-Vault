@@ -22,7 +22,7 @@ export async function GET() {
         id: user._id.toString(),
         name: user.name,
         email: user.email,
-        avatarUrl: user.avatarUrl ?? null,
+        profileImage: user.profileImage ?? null,
         lastLoginAt: user.lastLoginAt ?? null,
         createdAt: user.createdAt,
       },
