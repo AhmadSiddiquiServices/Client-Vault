@@ -13,7 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
 
@@ -39,15 +39,11 @@ const projectTypes: {
   { value: "other", label: "Other" },
 ];
 
-export default function ProjectsPage() {
+function ProjectsContent() {
   const searchParams = useSearchParams();
-
   const initialClientId = searchParams.get("client") || "all";
-
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
-
   const [clients, setClients] = useState<ProjectClientsResponse["clients"]>([]);
-
   const [search, setSearch] = useState("");
   const [clientId, setClientId] = useState(initialClientId);
   const [status, setStatus] = useState<"all" | ProjectStatus>("all");
@@ -895,5 +891,13 @@ function ProjectsTableSkeleton() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ProjectsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ProjectsContent />
+    </Suspense>
   );
 }
