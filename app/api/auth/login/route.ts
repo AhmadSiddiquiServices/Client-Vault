@@ -4,6 +4,11 @@ import { z } from "zod";
 import { connectToDatabase } from "@/lib/mongodb";
 import { createSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { verifyPassword } from "@/lib/auth/password";
+import { createTwoFactorChallenge } from "@/lib/auth/two-factor";
+import { sendTwoFactorOtp } from "@/lib/email/send-two-factor-otp";
+
+import TwoFactorChallenge from "@/models/TwoFactorChallenge";
+import Settings from "@/models/Settings";
 import User from "@/models/User";
 
 const loginSchema = z.object({
@@ -19,6 +24,7 @@ const loginSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+
     const result = loginSchema.safeParse(body);
 
     if (!result.success) {
@@ -83,9 +89,92 @@ export async function POST(request: Request) {
     }
 
     /**
-     * Update the user's last login timestamp.
+     * ----------------------------------------
+     * Check 2FA preference
+     * ----------------------------------------
+     *
+     * Settings belongs to the authenticated user.
+     *
+     * If the settings document does not exist yet,
+     * two-factor authentication is treated as disabled.
+     */
+    const settings = await Settings.findOne({
+      user: user._id,
+    })
+      .select("security.twoFactorEnabled")
+      .lean();
+
+    const twoFactorEnabled = settings?.security?.twoFactorEnabled === true;
+
+    /**
+     * ----------------------------------------
+     * 2FA enabled
+     * ----------------------------------------
+     *
+     * Do NOT:
+     * - update lastLoginAt
+     * - create a session
+     * - set clientvault_session
+     *
+     * The user must complete OTP verification first.
+     */
+    if (twoFactorEnabled) {
+      const challenge = await createTwoFactorChallenge(user._id);
+
+      try {
+        await sendTwoFactorOtp({
+          email: user.email,
+          userName: user.name,
+          otp: challenge.otp,
+          expiresInMinutes: 10,
+        });
+      } catch (emailError) {
+        /**
+         * If the email could not be sent, remove the
+         * challenge so the user doesn't get stuck with
+         * an OTP that was never delivered.
+         */
+
+        await TwoFactorChallenge.deleteOne({
+          _id: challenge.challengeId,
+          user: user._id,
+        });
+
+        console.error("Failed to send 2FA OTP email:", emailError);
+
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Unable to send the verification code. Please try again.",
+          },
+          { status: 500 },
+        );
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          requiresTwoFactor: true,
+          challengeId: challenge.challengeId,
+          message: "A verification code has been sent to your email.",
+          user: {
+            name: user.name,
+            email: user.email,
+          },
+        },
+        { status: 200 },
+      );
+    }
+
+    /**
+     * ----------------------------------------
+     * 2FA disabled
+     * ----------------------------------------
+     *
+     * Existing login behavior remains unchanged.
      */
     user.lastLoginAt = new Date();
+
     await user.save();
 
     /**
@@ -96,6 +185,7 @@ export async function POST(request: Request) {
     const response = NextResponse.json(
       {
         success: true,
+        requiresTwoFactor: false,
         message: "Login successful.",
         user: {
           id: user._id.toString(),

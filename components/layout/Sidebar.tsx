@@ -14,6 +14,7 @@ import {
   Tags,
   Users,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -215,18 +216,15 @@ export function Sidebar() {
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-[156px] border-r border-[var(--border)] bg-[var(--sidebar)] lg:flex lg:flex-col">
       {/* Logo */}
       <div className="flex h-[62px] items-center border-b border-[var(--border)] px-4">
-        <Link href="/dashboard" className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--primary-soft)]">
-            <LockKeyhole
-              size={16}
-              strokeWidth={2}
-              className="text-[var(--primary)]"
-            />
-          </div>
-
-          <span className="text-[13px] font-semibold tracking-[-0.02em] text-white">
-            ClientVault
-          </span>
+        <Link href="/dashboard" className="flex items-center">
+          <Image
+            src="/images/logo.png"
+            alt="ClientVault"
+            width={120}
+            height={32}
+            className="h-8 w-auto object-contain"
+            priority
+          />
         </Link>
       </div>
 
