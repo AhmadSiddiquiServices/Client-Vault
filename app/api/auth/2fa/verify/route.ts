@@ -2,7 +2,18 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { connectToDatabase } from "@/lib/mongodb";
-import { createSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import {
+  createSessionToken,
+  SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+} from "@/lib/auth/session";
+
+import { createDatabaseSession } from "@/lib/auth/create-session";
+
+import {
+  getRequestIpAddress,
+  getRequestUserAgent,
+} from "@/lib/auth/request-info";
 import { isOtpExpired, verifyOtp } from "@/lib/auth/otp";
 
 import TwoFactorChallenge from "@/models/TwoFactorChallenge";
@@ -42,8 +53,10 @@ export async function POST(request: Request) {
      *
      * codeHash has select:false, so explicitly request it.
      */
-    const challenge =
-      await TwoFactorChallenge.findById(challengeId).select("+codeHash");
+    const challenge = await TwoFactorChallenge.findOne({
+      _id: challengeId,
+      purpose: "login",
+    }).select("+codeHash");
 
     if (!challenge) {
       return NextResponse.json(
@@ -176,7 +189,16 @@ export async function POST(request: Request) {
     /**
      * Create the normal ClientVault session.
      */
-    const sessionToken = await createSessionToken(user._id.toString());
+    const session = await createDatabaseSession({
+      userId: user._id.toString(),
+      userAgent: getRequestUserAgent(request),
+      ipAddress: getRequestIpAddress(request),
+    });
+
+    const sessionToken = await createSessionToken(
+      user._id.toString(),
+      session.sessionId,
+    );
 
     const response = NextResponse.json(
       {
@@ -204,7 +226,7 @@ export async function POST(request: Request) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: SESSION_MAX_AGE_SECONDS,
     });
 
     return response;

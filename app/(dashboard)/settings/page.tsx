@@ -96,6 +96,52 @@ type VaultSettingsResponse = {
   };
 };
 
+type EnableTwoFactorResponse = {
+  success: boolean;
+  message?: string;
+  challengeId?: string;
+  expiresAt?: string;
+  resendAvailableAt?: string;
+  settings?: {
+    security: SecuritySettingsData;
+  };
+  recoveryCodes?: string[];
+};
+
+type RecoveryCodeCountResponse = {
+  success: boolean;
+  message?: string;
+  remainingCodes?: number;
+};
+
+type ActiveSession = {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+  lastActiveAt: string;
+  expiresAt: string;
+  isCurrent: boolean;
+};
+
+type SessionsResponse = {
+  success: boolean;
+  message?: string;
+  sessions?: ActiveSession[];
+  revokedCount?: number;
+};
+
+type RecoveryCodesResponse = {
+  success: boolean;
+  message?: string;
+  recoveryCodes?: string[];
+};
+
+type RecoveryCodesModalState = {
+  visible: boolean;
+  codes: string[];
+};
+
 const inputClass =
   "h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] text-white outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20";
 
@@ -753,6 +799,25 @@ function SecuritySettings() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [showTwoFactorVerification, setShowTwoFactorVerification] =
+    useState(false);
+
+  const [twoFactorChallengeId, setTwoFactorChallengeId] = useState<
+    string | null
+  >(null);
+
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+
+  const [twoFactorExpiresAt, setTwoFactorExpiresAt] = useState<number | null>(
+    null,
+  );
+
+  const [twoFactorCountdown, setTwoFactorCountdown] = useState(0);
+
+  const [isStartingTwoFactor, setIsStartingTwoFactor] = useState(false);
+
+  const [isVerifyingTwoFactor, setIsVerifyingTwoFactor] = useState(false);
+
   const [showChangePassword, setShowChangePassword] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState("");
@@ -763,6 +828,48 @@ function SecuritySettings() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const [showDisableTwoFactor, setShowDisableTwoFactor] = useState(false);
+  const [disableTwoFactorPassword, setDisableTwoFactorPassword] = useState("");
+  const [showDisablePassword, setShowDisablePassword] = useState(false);
+  const [isDisablingTwoFactor, setIsDisablingTwoFactor] = useState(false);
+
+  /**
+   * Active Sessions state.
+   */
+  const [showActiveSessions, setShowActiveSessions] = useState(false);
+  const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [revokingSessionId, setRevokingSessionId] = useState<string | null>(
+    null,
+  );
+  const [isRevokingOthers, setIsRevokingOthers] = useState(false);
+
+  const [showRecoveryCodes, setShowRecoveryCodes] = useState(false);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [recoveryCodesSaved, setRecoveryCodesSaved] = useState(false);
+
+  const [remainingRecoveryCodes, setRemainingRecoveryCodes] = useState<
+    number | null
+  >(null);
+
+  const [isLoadingRecoveryCodes, setIsLoadingRecoveryCodes] = useState(false);
+  const [showRegenerateRecoveryCodes, setShowRegenerateRecoveryCodes] =
+    useState(false);
+  const [regenerateRecoveryPassword, setRegenerateRecoveryPassword] =
+    useState("");
+  const [showRegenerateRecoveryPassword, setShowRegenerateRecoveryPassword] =
+    useState(false);
+  const [isRegeneratingRecoveryCodes, setIsRegeneratingRecoveryCodes] =
+    useState(false);
+  const [showRegeneratedRecoveryCodes, setShowRegeneratedRecoveryCodes] =
+    useState(false);
+  const [regeneratedRecoveryCodes, setRegeneratedRecoveryCodes] = useState<
+    string[]
+  >([]);
+  const [regeneratedRecoveryCodesSaved, setRegeneratedRecoveryCodesSaved] =
+    useState(false);
 
   /**
    * Load the authenticated user's settings.
@@ -812,57 +919,106 @@ function SecuritySettings() {
   }, []);
 
   /**
-   * Update the Two-Factor Authentication preference.
+   * Countdown for the 2FA enable verification code.
    */
-  async function handleTwoFactorChange(enabled: boolean) {
-    if (isUpdating) {
+  useEffect(() => {
+    if (!showTwoFactorVerification || twoFactorExpiresAt === null) {
+      setTwoFactorCountdown(0);
       return;
     }
 
-    const previousValue = twoFactor;
+    const targetTime = twoFactorExpiresAt;
 
-    // Optimistic UI update.
-    setTwoFactor(enabled);
-    setIsUpdating(true);
+    function updateCountdown() {
+      const remaining = Math.max(
+        0,
+        Math.ceil((targetTime - Date.now()) / 1000),
+      );
 
+      setTwoFactorCountdown(remaining);
+    }
+
+    updateCountdown();
+
+    const interval = window.setInterval(updateCountdown, 1000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [showTwoFactorVerification, twoFactorExpiresAt]);
+
+  /**
+   * Update the Two-Factor Authentication preference.
+   */
+  async function handleTwoFactorChange(enabled: boolean) {
+    if (
+      isUpdating ||
+      isStartingTwoFactor ||
+      isVerifyingTwoFactor ||
+      isDisablingTwoFactor
+    ) {
+      return;
+    }
+
+    /**
+     * ----------------------------------------
+     * Disable 2FA
+     * ----------------------------------------
+     *
+     * Do NOT change the toggle here.
+     *
+     * Open the re-authentication modal and wait
+     * for the user to confirm their password.
+     */
+    if (!enabled) {
+      setDisableTwoFactorPassword("");
+      setShowDisablePassword(false);
+      setShowDisableTwoFactor(true);
+
+      return;
+    }
+
+    /**
+     * ----------------------------------------
+     * Enable 2FA
+     * ----------------------------------------
+     *
+     * Start the secure OTP verification flow.
+     */
     try {
-      const response = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          security: {
-            twoFactorEnabled: enabled,
-          },
-        }),
+      setIsStartingTwoFactor(true);
+
+      const response = await fetch("/api/settings/security/2fa/enable", {
+        method: "POST",
+        credentials: "include",
       });
 
-      const data: SettingsResponse = await response.json();
+      const data: EnableTwoFactorResponse = await response.json();
 
-      if (!response.ok || !data.success || !data.settings) {
-        throw new Error(data.message || "Failed to update security settings.");
+      if (!response.ok || !data.success || !data.challengeId) {
+        throw new Error(
+          data.message || "Unable to start two-factor authentication.",
+        );
       }
 
-      // Use the value returned by the backend as the source of truth.
-      setTwoFactor(data.settings.security.twoFactorEnabled);
+      setTwoFactorChallengeId(data.challengeId);
+      setTwoFactorCode("");
 
-      toast.success(
-        enabled
-          ? "Two-factor authentication enabled."
-          : "Two-factor authentication disabled.",
+      setTwoFactorExpiresAt(
+        data.expiresAt ? new Date(data.expiresAt).getTime() : null,
       );
-    } catch (error) {
-      // Roll back optimistic update.
-      setTwoFactor(previousValue);
 
+      setShowTwoFactorVerification(true);
+
+      toast.success("A verification code has been sent to your email.");
+    } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Failed to update two-factor authentication.",
+          : "Unable to start two-factor authentication.",
       );
     } finally {
-      setIsUpdating(false);
+      setIsStartingTwoFactor(false);
     }
   }
 
@@ -942,6 +1098,555 @@ function SecuritySettings() {
     }
   }
 
+  /**
+   * Verify the OTP and complete the 2FA enable flow.
+   */
+  async function handleVerifyTwoFactor() {
+    if (isVerifyingTwoFactor || isStartingTwoFactor) {
+      return;
+    }
+
+    if (!twoFactorChallengeId) {
+      toast.error(
+        "This verification request is no longer valid. Please try again.",
+      );
+      return;
+    }
+
+    if (!/^\d{6}$/.test(twoFactorCode)) {
+      toast.error("Please enter the 6-digit verification code.");
+      return;
+    }
+
+    if (twoFactorExpiresAt !== null && twoFactorCountdown <= 0) {
+      toast.error(
+        "This verification code has expired. Please request a new code.",
+      );
+      return;
+    }
+
+    try {
+      setIsVerifyingTwoFactor(true);
+
+      const response = await fetch("/api/settings/security/2fa/enable/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          challengeId: twoFactorChallengeId,
+          code: twoFactorCode,
+        }),
+      });
+
+      const data: EnableTwoFactorResponse = await response.json();
+
+      if (!response.ok || !data.success || !data.settings) {
+        throw new Error(
+          data.message ||
+            "Failed to verify the two-factor authentication code.",
+        );
+      }
+
+      /**
+       * Backend is now the source of truth.
+       */
+      setTwoFactor(data.settings.security.twoFactorEnabled);
+
+      /**
+       * Clear OTP verification state.
+       */
+      setShowTwoFactorVerification(false);
+      setTwoFactorChallengeId(null);
+      setTwoFactorCode("");
+      setTwoFactorExpiresAt(null);
+      setTwoFactorCountdown(0);
+
+      /**
+       * Store recovery codes temporarily for the
+       * one-time recovery-code setup screen.
+       */
+      if (Array.isArray(data.recoveryCodes) && data.recoveryCodes.length > 0) {
+        setRecoveryCodes(data.recoveryCodes);
+        setRecoveryCodesSaved(false);
+        setShowRecoveryCodes(true);
+      } else {
+        /**
+         * This should not normally happen because the backend
+         * generates recovery codes when 2FA is enabled.
+         */
+        toast.success("Two-factor authentication enabled.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to verify the verification code.",
+      );
+    } finally {
+      setIsVerifyingTwoFactor(false);
+    }
+  }
+
+  function handleCloseTwoFactorVerification() {
+    if (isVerifyingTwoFactor) {
+      return;
+    }
+
+    setShowTwoFactorVerification(false);
+    setTwoFactorChallengeId(null);
+    setTwoFactorCode("");
+    setTwoFactorExpiresAt(null);
+    setTwoFactorCountdown(0);
+  }
+
+  async function handleDisableTwoFactor() {
+    if (isDisablingTwoFactor) {
+      return;
+    }
+
+    if (!disableTwoFactorPassword) {
+      toast.error("Current password is required.");
+      return;
+    }
+
+    try {
+      setIsDisablingTwoFactor(true);
+
+      const response = await fetch("/api/settings/security/2fa/disable", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          currentPassword: disableTwoFactorPassword,
+        }),
+      });
+
+      const data: SettingsResponse = await response.json();
+
+      if (!response.ok || !data.success || !data.settings) {
+        throw new Error(
+          data.message || "Failed to disable two-factor authentication.",
+        );
+      }
+
+      /**
+       * Backend is the source of truth.
+       */
+      setTwoFactor(data.settings.security.twoFactorEnabled);
+
+      /**
+       * Clear modal state.
+       */
+      setShowDisableTwoFactor(false);
+      setDisableTwoFactorPassword("");
+      setShowDisablePassword(false);
+
+      toast.success("Two-factor authentication disabled.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to disable two-factor authentication.",
+      );
+    } finally {
+      setIsDisablingTwoFactor(false);
+    }
+  }
+
+  function handleCloseActiveSessions() {
+    if (isLoadingSessions || revokingSessionId || isRevokingOthers) {
+      return;
+    }
+
+    setShowActiveSessions(false);
+    setActiveSessions([]);
+    setSessionError(null);
+  }
+
+  /**
+   * Load all active sessions for the current user.
+   */
+  async function handleViewSessions() {
+    if (isLoadingSessions || revokingSessionId || isRevokingOthers) {
+      return;
+    }
+
+    try {
+      setIsLoadingSessions(true);
+      setSessionError(null);
+      setShowActiveSessions(true);
+
+      const response = await fetch("/api/settings/security/sessions", {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
+
+      const data: SessionsResponse = await response.json();
+
+      if (!response.ok || !data.success || !data.sessions) {
+        throw new Error(data.message || "Failed to load active sessions.");
+      }
+
+      setActiveSessions(data.sessions);
+    } catch (error) {
+      setSessionError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load active sessions.",
+      );
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }
+
+  /**
+   * Revoke one specific session.
+   */
+  async function handleRevokeSession(sessionId: string) {
+    if (revokingSessionId || isRevokingOthers || isLoadingSessions) {
+      return;
+    }
+
+    const session = activeSessions.find((item) => item.id === sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    if (session.isCurrent) {
+      toast.error("Your current session cannot be revoked here.");
+      return;
+    }
+
+    try {
+      setRevokingSessionId(sessionId);
+
+      const response = await fetch(
+        `/api/settings/security/sessions/${sessionId}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
+
+      const data: {
+        success: boolean;
+        message?: string;
+      } = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Failed to revoke session.");
+      }
+
+      setActiveSessions((currentSessions) =>
+        currentSessions.filter((item) => item.id !== sessionId),
+      );
+
+      toast.success("Session revoked.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to revoke session.",
+      );
+    } finally {
+      setRevokingSessionId(null);
+    }
+  }
+
+  /**
+   * Revoke every active session except the current session.
+   */
+  async function handleRevokeOtherSessions() {
+    if (isRevokingOthers || revokingSessionId || isLoadingSessions) {
+      return;
+    }
+
+    const hasOtherSessions = activeSessions.some(
+      (session) => !session.isCurrent,
+    );
+
+    if (!hasOtherSessions) {
+      toast("There are no other active sessions.");
+      return;
+    }
+
+    try {
+      setIsRevokingOthers(true);
+
+      const response = await fetch(
+        "/api/settings/security/sessions/revoke-others",
+        {
+          method: "POST",
+          credentials: "include",
+        },
+      );
+
+      const data: SessionsResponse = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Failed to revoke other sessions.");
+      }
+
+      /**
+       * Keep the current session in the UI.
+       */
+      setActiveSessions((currentSessions) =>
+        currentSessions.filter((session) => session.isCurrent),
+      );
+
+      toast.success(
+        data.revokedCount
+          ? `${data.revokedCount} other session${
+              data.revokedCount === 1 ? "" : "s"
+            } revoked.`
+          : "There were no other active sessions to revoke.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to revoke other sessions.",
+      );
+    } finally {
+      setIsRevokingOthers(false);
+    }
+  }
+
+  async function handleCopyRecoveryCodes() {
+    if (recoveryCodes.length === 0) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(recoveryCodes.join("\n"));
+
+      toast.success("Recovery codes copied.");
+    } catch {
+      toast.error("Unable to copy recovery codes.");
+    }
+  }
+
+  function handleDownloadRecoveryCodes() {
+    if (recoveryCodes.length === 0) {
+      return;
+    }
+
+    const content = [
+      "ClientVault Recovery Codes",
+      "",
+      "Keep these codes somewhere safe.",
+      "Each recovery code can only be used once.",
+      "",
+      ...recoveryCodes,
+      "",
+    ].join("\n");
+
+    const blob = new Blob([content], {
+      type: "text/plain;charset=utf-8",
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "clientvault-recovery-codes.txt";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+
+    toast.success("Recovery codes downloaded.");
+  }
+
+  function handleRecoveryCodesContinue() {
+    if (!recoveryCodesSaved) {
+      toast.error("Please confirm that you have saved your recovery codes.");
+
+      return;
+    }
+
+    setShowRecoveryCodes(false);
+    setRecoveryCodes([]);
+    setRecoveryCodesSaved(false);
+  }
+
+  async function loadRecoveryCodeCount() {
+    try {
+      setIsLoadingRecoveryCodes(true);
+
+      const response = await fetch("/api/settings/security/2fa/recovery", {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
+
+      const data: RecoveryCodeCountResponse = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Failed to load recovery-code status.");
+      }
+
+      setRemainingRecoveryCodes(
+        typeof data.remainingCodes === "number" ? data.remainingCodes : 0,
+      );
+    } catch (error) {
+      console.error("Recovery-code count request failed:", error);
+
+      setRemainingRecoveryCodes(null);
+    } finally {
+      setIsLoadingRecoveryCodes(false);
+    }
+  }
+
+  async function handleRegenerateRecoveryCodes() {
+    if (isRegeneratingRecoveryCodes) {
+      return;
+    }
+
+    if (!regenerateRecoveryPassword) {
+      toast.error("Current password is required.");
+      return;
+    }
+
+    try {
+      setIsRegeneratingRecoveryCodes(true);
+
+      const response = await fetch(
+        "/api/settings/security/2fa/recovery/regenerate",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify({
+            currentPassword: regenerateRecoveryPassword,
+          }),
+        },
+      );
+
+      const data: {
+        success: boolean;
+        message?: string;
+        recoveryCodes?: string[];
+      } = await response.json();
+
+      if (
+        !response.ok ||
+        !data.success ||
+        !Array.isArray(data.recoveryCodes) ||
+        data.recoveryCodes.length === 0
+      ) {
+        throw new Error(data.message || "Failed to regenerate recovery codes.");
+      }
+
+      /**
+       * Close password modal.
+       */
+      setShowRegenerateRecoveryCodes(false);
+      setRegenerateRecoveryPassword("");
+      setShowRegenerateRecoveryPassword(false);
+
+      /**
+       * Show the new recovery codes exactly once.
+       */
+      setRegeneratedRecoveryCodes(data.recoveryCodes);
+      setRegeneratedRecoveryCodesSaved(false);
+      setShowRegeneratedRecoveryCodes(true);
+
+      /**
+       * New set contains all unused codes.
+       */
+      setRemainingRecoveryCodes(data.recoveryCodes.length);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to regenerate recovery codes.",
+      );
+    } finally {
+      setIsRegeneratingRecoveryCodes(false);
+    }
+  }
+
+  async function handleCopyRegeneratedRecoveryCodes() {
+    if (regeneratedRecoveryCodes.length === 0) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(regeneratedRecoveryCodes.join("\n"));
+
+      toast.success("Recovery codes copied.");
+    } catch {
+      toast.error("Unable to copy recovery codes.");
+    }
+  }
+
+  function handleDownloadRegeneratedRecoveryCodes() {
+    if (regeneratedRecoveryCodes.length === 0) {
+      return;
+    }
+
+    const content = [
+      "ClientVault Recovery Codes",
+      "",
+      "Keep these codes somewhere safe.",
+      "Each recovery code can only be used once.",
+      "",
+      ...regeneratedRecoveryCodes,
+      "",
+    ].join("\n");
+
+    const blob = new Blob([content], {
+      type: "text/plain;charset=utf-8",
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "clientvault-recovery-codes.txt";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+
+    toast.success("Recovery codes downloaded.");
+  }
+
+  function handleCloseRegeneratedRecoveryCodes() {
+    if (!regeneratedRecoveryCodesSaved) {
+      toast.error("Please confirm that you have saved your recovery codes.");
+
+      return;
+    }
+
+    setShowRegeneratedRecoveryCodes(false);
+    setRegeneratedRecoveryCodes([]);
+    setRegeneratedRecoveryCodesSaved(false);
+  }
+
+  useEffect(() => {
+    if (!isLoading && !error && twoFactor) {
+      loadRecoveryCodeCount();
+    }
+
+    if (!twoFactor) {
+      setRemainingRecoveryCodes(0);
+    }
+  }, [isLoading, error, twoFactor]);
+
   return (
     <div className="space-y-5">
       <SettingsCard
@@ -997,8 +1702,52 @@ function SecuritySettings() {
                 <Toggle
                   enabled={twoFactor}
                   onChange={handleTwoFactorChange}
-                  disabled={isUpdating}
+                  disabled={
+                    isUpdating || isStartingTwoFactor || isVerifyingTwoFactor
+                  }
                 />
+              }
+            />
+
+            <SecurityItem
+              icon={<KeyRound size={16} />}
+              title="Recovery Codes"
+              description={
+                twoFactor
+                  ? isLoadingRecoveryCodes
+                    ? "Checking remaining recovery codes..."
+                    : remainingRecoveryCodes !== null
+                      ? `${remainingRecoveryCodes} recovery ${
+                          remainingRecoveryCodes === 1 ? "code" : "codes"
+                        } remaining. Each code can only be used once.`
+                      : "Recovery codes are available for account recovery."
+                  : "Recovery codes become available when two-factor authentication is enabled."
+              }
+              action={
+                twoFactor ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegenerateRecoveryPassword("");
+                      setShowRegenerateRecoveryPassword(false);
+                      setShowRegenerateRecoveryCodes(false);
+                      setRegeneratedRecoveryCodes([]);
+                      setRegeneratedRecoveryCodesSaved(false);
+
+                      setShowRegenerateRecoveryCodes(true);
+                    }}
+                    disabled={
+                      isLoadingRecoveryCodes || isRegeneratingRecoveryCodes
+                    }
+                    className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isLoadingRecoveryCodes ? "Loading..." : "Regenerate Codes"}
+                  </button>
+                ) : (
+                  <span className="text-[10px] text-[var(--muted)]">
+                    Not available
+                  </span>
+                )
               }
             />
 
@@ -1009,12 +1758,251 @@ function SecuritySettings() {
               action={
                 <button
                   type="button"
-                  className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)]"
+                  onClick={handleViewSessions}
+                  disabled={
+                    isLoadingSessions ||
+                    revokingSessionId !== null ||
+                    isRevokingOthers
+                  }
+                  className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  View Sessions
+                  {isLoadingSessions ? "Loading..." : "View Sessions"}
                 </button>
               }
             />
+
+            {showTwoFactorVerification && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+                  {/* Header */}
+                  <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--background)]">
+                          <ShieldCheck
+                            size={15}
+                            className="text-[var(--primary)]"
+                          />
+                        </div>
+
+                        <div>
+                          <h2 className="text-[14px] font-semibold text-white">
+                            Enable Two-Factor Authentication
+                          </h2>
+
+                          <p className="mt-1 text-[11px] text-[var(--muted)]">
+                            Verify your email to enable 2FA.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCloseTwoFactorVerification}
+                      disabled={isVerifyingTwoFactor}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* Content */}
+                  <div className="space-y-5 p-5">
+                    <div>
+                      <p className="text-[11px] leading-5 text-[var(--muted)]">
+                        We sent a 6-digit verification code to your account
+                        email address. Enter the code below to complete the
+                        setup.
+                      </p>
+                    </div>
+
+                    {/* OTP */}
+                    <div>
+                      <label
+                        htmlFor="enable-two-factor-code"
+                        className="mb-1.5 block text-[11px] font-medium text-white"
+                      >
+                        Verification Code
+                      </label>
+
+                      <input
+                        id="enable-two-factor-code"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        value={twoFactorCode}
+                        onChange={(event) => {
+                          const value = event.target.value
+                            .replace(/\D/g, "")
+                            .slice(0, 6);
+
+                          setTwoFactorCode(value);
+                        }}
+                        placeholder="Enter 6-digit code"
+                        disabled={isVerifyingTwoFactor}
+                        className={`${inputClass} text-center text-[16px] tracking-[0.3em]`}
+                      />
+                    </div>
+
+                    {/* Expiration */}
+                    <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2.5">
+                      <span className="text-[10px] text-[var(--muted)]">
+                        Code expires in
+                      </span>
+
+                      <span
+                        className={`text-[10px] font-medium ${
+                          twoFactorCountdown <= 60
+                            ? "text-red-400"
+                            : "text-white"
+                        }`}
+                      >
+                        {twoFactorCountdown > 0
+                          ? `${Math.floor(twoFactorCountdown / 60)
+                              .toString()
+                              .padStart(2, "0")}:${(twoFactorCountdown % 60)
+                              .toString()
+                              .padStart(2, "0")}`
+                          : "Expired"}
+                      </span>
+                    </div>
+
+                    <p className="text-[10px] leading-5 text-[var(--muted)]">
+                      This code can only be used to confirm enabling two-factor
+                      authentication on your account.
+                    </p>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-5 py-4">
+                    <button
+                      type="button"
+                      disabled={isVerifyingTwoFactor}
+                      onClick={handleCloseTwoFactorVerification}
+                      className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={
+                        isVerifyingTwoFactor ||
+                        twoFactorCode.length !== 6 ||
+                        twoFactorCountdown <= 0
+                      }
+                      onClick={handleVerifyTwoFactor}
+                      className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[11px] font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isVerifyingTwoFactor
+                        ? "Verifying..."
+                        : "Verify & Enable"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showRecoveryCodes && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+                  {/* Header */}
+                  <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-4">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--background)]">
+                      <ShieldCheck
+                        size={15}
+                        className="text-[var(--primary)]"
+                      />
+                    </div>
+
+                    <div>
+                      <h2 className="text-[14px] font-semibold text-white">
+                        Save Your Recovery Codes
+                      </h2>
+
+                      <p className="mt-1 text-[11px] text-[var(--muted)]">
+                        Use these codes if you cannot access your verification
+                        email.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Content */}
+                  <div className="space-y-4 p-5">
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                      <p className="text-[11px] leading-5 text-amber-300">
+                        These codes are shown only once. Store them somewhere
+                        secure. Each code can be used only once.
+                      </p>
+                    </div>
+
+                    {/* Codes */}
+                    <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-4">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {recoveryCodes.map((code) => (
+                          <div
+                            key={code}
+                            className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-center font-mono text-[11px] tracking-wider text-white"
+                          >
+                            {code}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={handleCopyRecoveryCodes}
+                        className="h-8 flex-1 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)]"
+                      >
+                        Copy All
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDownloadRecoveryCodes}
+                        className="h-8 flex-1 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)]"
+                      >
+                        Download
+                      </button>
+                    </div>
+
+                    {/* Confirmation */}
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--background)] p-3">
+                      <input
+                        type="checkbox"
+                        checked={recoveryCodesSaved}
+                        onChange={(event) =>
+                          setRecoveryCodesSaved(event.target.checked)
+                        }
+                        className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                      />
+
+                      <span className="text-[10px] leading-5 text-[var(--muted)]">
+                        I have saved my recovery codes in a secure location.
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end border-t border-[var(--border)] px-5 py-4">
+                    <button
+                      type="button"
+                      disabled={!recoveryCodesSaved}
+                      onClick={handleRecoveryCodesContinue}
+                      className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[11px] font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      I've Saved My Recovery Codes
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {showChangePassword && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
@@ -1223,6 +2211,546 @@ function SecuritySettings() {
                       className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[11px] font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isChangingPassword ? "Changing..." : "Change Password"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showDisableTwoFactor && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+                  {/* Header */}
+                  <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+                    <div>
+                      <h2 className="text-[14px] font-semibold text-white">
+                        Disable Two-Factor Authentication
+                      </h2>
+
+                      <p className="mt-1 text-[11px] text-[var(--muted)]">
+                        Confirm your current password to disable 2FA.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isDisablingTwoFactor) return;
+
+                        setShowDisableTwoFactor(false);
+                        setDisableTwoFactorPassword("");
+                        setShowDisablePassword(false);
+                      }}
+                      disabled={isDisablingTwoFactor}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* Content */}
+                  <div className="space-y-4 p-5">
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                      <p className="text-[11px] leading-5 text-amber-300">
+                        Disabling two-factor authentication will reduce the
+                        protection on your ClientVault account.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="disable-two-factor-password"
+                        className="mb-1.5 block text-[11px] font-medium text-white"
+                      >
+                        Current Password
+                      </label>
+
+                      <div className="relative">
+                        <input
+                          id="disable-two-factor-password"
+                          type={showDisablePassword ? "text" : "password"}
+                          value={disableTwoFactorPassword}
+                          onChange={(event) =>
+                            setDisableTwoFactorPassword(event.target.value)
+                          }
+                          placeholder="Enter your current password"
+                          autoComplete="current-password"
+                          disabled={isDisablingTwoFactor}
+                          className={`${inputClass} pr-10`}
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowDisablePassword((current) => !current)
+                          }
+                          disabled={isDisablingTwoFactor}
+                          aria-label={
+                            showDisablePassword
+                              ? "Hide current password"
+                              : "Show current password"
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {showDisablePassword ? (
+                            <EyeOff size={15} />
+                          ) : (
+                            <Eye size={15} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-5 py-4">
+                    <button
+                      type="button"
+                      disabled={isDisablingTwoFactor}
+                      onClick={() => {
+                        setShowDisableTwoFactor(false);
+                        setDisableTwoFactorPassword("");
+                        setShowDisablePassword(false);
+                      }}
+                      className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={
+                        isDisablingTwoFactor || !disableTwoFactorPassword
+                      }
+                      onClick={handleDisableTwoFactor}
+                      className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[11px] font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isDisablingTwoFactor ? "Disabling..." : "Disable 2FA"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showActiveSessions && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-2xl rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+                  {/* Header */}
+                  <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+                    <div>
+                      <h2 className="text-[14px] font-semibold text-white">
+                        Active Sessions
+                      </h2>
+
+                      <p className="mt-1 text-[11px] text-[var(--muted)]">
+                        Review devices currently signed in to your ClientVault
+                        account.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCloseActiveSessions}
+                      disabled={
+                        isLoadingSessions ||
+                        revokingSessionId !== null ||
+                        isRevokingOthers
+                      }
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* Content */}
+                  <div className="p-5">
+                    {isLoadingSessions && (
+                      <div className="space-y-3">
+                        {[1, 2].map((item) => (
+                          <div
+                            key={item}
+                            className="animate-pulse rounded-lg border border-[var(--border)] bg-[var(--background)] p-4"
+                          >
+                            <div className="h-3 w-32 rounded bg-white/5" />
+                            <div className="mt-2 h-2.5 w-56 rounded bg-white/5" />
+                            <div className="mt-2 h-2.5 w-40 rounded bg-white/5" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {!isLoadingSessions && sessionError && (
+                      <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+                        <p className="text-[11px] text-red-400">
+                          {sessionError}
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={handleViewSessions}
+                          className="mt-3 h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)]"
+                        >
+                          Try Again
+                        </button>
+                      </div>
+                    )}
+
+                    {!isLoadingSessions &&
+                      !sessionError &&
+                      activeSessions.length === 0 && (
+                        <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-6 text-center">
+                          <p className="text-[12px] font-medium text-white">
+                            No active sessions found.
+                          </p>
+
+                          <p className="mt-1 text-[10px] text-[var(--muted)]">
+                            Your current session may no longer be active.
+                          </p>
+                        </div>
+                      )}
+
+                    {!isLoadingSessions &&
+                      !sessionError &&
+                      activeSessions.length > 0 && (
+                        <div className="space-y-3">
+                          {activeSessions.map((session) => (
+                            <div
+                              key={session.id}
+                              className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-4"
+                            >
+                              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-[12px] font-medium text-white">
+                                      {getSessionBrowserLabel(
+                                        session.userAgent,
+                                      )}
+                                    </p>
+
+                                    {session.isCurrent && (
+                                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-medium text-emerald-400">
+                                        Current session
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="mt-2 space-y-1">
+                                    <p className="text-[10px] text-[var(--muted)]">
+                                      IP:{" "}
+                                      <span className="text-white/80">
+                                        {session.ipAddress || "Unavailable"}
+                                      </span>
+                                    </p>
+
+                                    <p className="text-[10px] text-[var(--muted)]">
+                                      Last active:{" "}
+                                      <span className="text-white/80">
+                                        {formatSessionDate(
+                                          session.lastActiveAt,
+                                        )}
+                                      </span>
+                                    </p>
+
+                                    <p className="text-[10px] text-[var(--muted)]">
+                                      Signed in:{" "}
+                                      <span className="text-white/80">
+                                        {formatSessionDate(session.createdAt)}
+                                      </span>
+                                    </p>
+
+                                    <p className="text-[10px] text-[var(--muted)]">
+                                      Expires:{" "}
+                                      <span className="text-white/80">
+                                        {formatSessionDate(session.expiresAt)}
+                                      </span>
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {!session.isCurrent && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleRevokeSession(session.id)
+                                    }
+                                    disabled={
+                                      revokingSessionId === session.id ||
+                                      isRevokingOthers ||
+                                      isLoadingSessions
+                                    }
+                                    className="h-8 shrink-0 rounded-lg border border-red-500/20 px-3 text-[11px] font-medium text-red-400 transition hover:bg-red-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {revokingSessionId === session.id
+                                      ? "Revoking..."
+                                      : "Revoke"}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                  </div>
+
+                  {/* Footer */}
+                  {!isLoadingSessions &&
+                    !sessionError &&
+                    activeSessions.some((session) => !session.isCurrent) && (
+                      <div className="flex flex-col gap-3 border-t border-[var(--border)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-[10px] text-[var(--muted)]">
+                          Revoke all other sessions to sign out devices you no
+                          longer recognize.
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={handleRevokeOtherSessions}
+                          disabled={
+                            isRevokingOthers || revokingSessionId !== null
+                          }
+                          className="h-8 shrink-0 rounded-lg border border-red-500/20 px-3 text-[11px] font-medium text-red-400 transition hover:bg-red-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isRevokingOthers
+                            ? "Revoking..."
+                            : "Revoke All Other Sessions"}
+                        </button>
+                      </div>
+                    )}
+
+                  {!isLoadingSessions &&
+                    !sessionError &&
+                    !activeSessions.some((session) => !session.isCurrent) && (
+                      <div className="flex justify-end border-t border-[var(--border)] px-5 py-4">
+                        <button
+                          type="button"
+                          onClick={handleCloseActiveSessions}
+                          disabled={
+                            revokingSessionId !== null || isRevokingOthers
+                          }
+                          className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    )}
+                </div>
+              </div>
+            )}
+
+            {showRegenerateRecoveryCodes && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+                  {/* Header */}
+                  <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+                    <div>
+                      <h2 className="text-[14px] font-semibold text-white">
+                        Regenerate Recovery Codes
+                      </h2>
+
+                      <p className="mt-1 text-[11px] text-[var(--muted)]">
+                        Confirm your current password to replace your existing
+                        codes.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isRegeneratingRecoveryCodes) return;
+
+                        setShowRegenerateRecoveryCodes(false);
+                        setRegenerateRecoveryPassword("");
+                        setShowRegenerateRecoveryPassword(false);
+                      }}
+                      disabled={isRegeneratingRecoveryCodes}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* Content */}
+                  <div className="space-y-4 p-5">
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                      <p className="text-[11px] leading-5 text-amber-300">
+                        Regenerating your recovery codes will immediately
+                        invalidate all of your current recovery codes.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="regenerate-recovery-password"
+                        className="mb-1.5 block text-[11px] font-medium text-white"
+                      >
+                        Current Password
+                      </label>
+
+                      <div className="relative">
+                        <input
+                          id="regenerate-recovery-password"
+                          type={
+                            showRegenerateRecoveryPassword ? "text" : "password"
+                          }
+                          value={regenerateRecoveryPassword}
+                          onChange={(event) =>
+                            setRegenerateRecoveryPassword(event.target.value)
+                          }
+                          placeholder="Enter your current password"
+                          autoComplete="current-password"
+                          disabled={isRegeneratingRecoveryCodes}
+                          className={`${inputClass} pr-10`}
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowRegenerateRecoveryPassword(
+                              (current) => !current,
+                            )
+                          }
+                          disabled={isRegeneratingRecoveryCodes}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={
+                            showRegenerateRecoveryPassword
+                              ? "Hide current password"
+                              : "Show current password"
+                          }
+                        >
+                          {showRegenerateRecoveryPassword ? (
+                            <EyeOff size={15} />
+                          ) : (
+                            <Eye size={15} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-5 py-4">
+                    <button
+                      type="button"
+                      disabled={isRegeneratingRecoveryCodes}
+                      onClick={() => {
+                        setShowRegenerateRecoveryCodes(false);
+                        setRegenerateRecoveryPassword("");
+                        setShowRegenerateRecoveryPassword(false);
+                      }}
+                      className="h-8 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-[var(--muted)] transition hover:bg-[var(--background)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={
+                        isRegeneratingRecoveryCodes ||
+                        !regenerateRecoveryPassword
+                      }
+                      onClick={handleRegenerateRecoveryCodes}
+                      className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[11px] font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isRegeneratingRecoveryCodes
+                        ? "Regenerating..."
+                        : "Regenerate Codes"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showRegeneratedRecoveryCodes && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+                  {/* Header */}
+                  <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-4">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--background)]">
+                      <ShieldCheck
+                        size={15}
+                        className="text-[var(--primary)]"
+                      />
+                    </div>
+
+                    <div>
+                      <h2 className="text-[14px] font-semibold text-white">
+                        Your New Recovery Codes
+                      </h2>
+
+                      <p className="mt-1 text-[11px] text-[var(--muted)]">
+                        Your previous recovery codes are no longer valid.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Content */}
+                  <div className="space-y-4 p-5">
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                      <p className="text-[11px] leading-5 text-amber-300">
+                        These codes are shown only once. Store them somewhere
+                        secure. Each code can be used only once.
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-4">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {regeneratedRecoveryCodes.map((code) => (
+                          <div
+                            key={code}
+                            className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-center font-mono text-[11px] tracking-wider text-white"
+                          >
+                            {code}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={handleCopyRegeneratedRecoveryCodes}
+                        className="h-8 flex-1 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)]"
+                      >
+                        Copy All
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDownloadRegeneratedRecoveryCodes}
+                        className="h-8 flex-1 rounded-lg border border-[var(--border)] px-3 text-[11px] font-medium text-white transition hover:bg-[var(--background)]"
+                      >
+                        Download
+                      </button>
+                    </div>
+
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--background)] p-3">
+                      <input
+                        type="checkbox"
+                        checked={regeneratedRecoveryCodesSaved}
+                        onChange={(event) =>
+                          setRegeneratedRecoveryCodesSaved(event.target.checked)
+                        }
+                        className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                      />
+
+                      <span className="text-[10px] leading-5 text-[var(--muted)]">
+                        I have saved my new recovery codes in a secure location.
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end border-t border-[var(--border)] px-5 py-4">
+                    <button
+                      type="button"
+                      disabled={!regeneratedRecoveryCodesSaved}
+                      onClick={handleCloseRegeneratedRecoveryCodes}
+                      className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[11px] font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      I've Saved My Recovery Codes
                     </button>
                   </div>
                 </div>
@@ -2442,4 +3970,48 @@ function NotificationItemSkeleton() {
       <div className="h-6 w-11 rounded-full bg-[var(--background)]" />
     </div>
   );
+}
+
+function getSessionBrowserLabel(userAgent: string | null): string {
+  if (!userAgent) {
+    return "Unknown browser";
+  }
+
+  if (/Edg\//i.test(userAgent)) {
+    return "Microsoft Edge";
+  }
+
+  if (/Chrome\//i.test(userAgent)) {
+    return "Google Chrome";
+  }
+
+  if (/Firefox\//i.test(userAgent)) {
+    return "Mozilla Firefox";
+  }
+
+  if (/Safari\//i.test(userAgent) && !/Chrome\//i.test(userAgent)) {
+    return "Safari";
+  }
+
+  if (/OPR\//i.test(userAgent)) {
+    return "Opera";
+  }
+
+  return "Unknown browser";
+}
+
+/* ----------------------------------------
+   Format Session Date
+---------------------------------------- */
+function formatSessionDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Unavailable";
+  }
+
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }

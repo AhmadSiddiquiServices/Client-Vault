@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 
-import TwoFactorChallenge from "@/models/TwoFactorChallenge";
+import TwoFactorChallenge, {
+  TwoFactorChallengePurpose,
+} from "@/models/TwoFactorChallenge";
 
 import {
   generateOtp,
@@ -31,13 +33,9 @@ export type TwoFactorResendResult =
       retryAfterSeconds: number;
     };
 
-/**
- * Create or replace the current OTP challenge for a user.
- *
- * There is only one active challenge per user.
- */
 export async function createTwoFactorChallenge(
   userId: mongoose.Types.ObjectId,
+  purpose: TwoFactorChallengePurpose,
 ): Promise<TwoFactorChallengeResult> {
   const otp = generateOtp();
   const codeHash = hashOtp(otp);
@@ -51,9 +49,11 @@ export async function createTwoFactorChallenge(
   const challenge = await TwoFactorChallenge.findOneAndUpdate(
     {
       user: userId,
+      purpose,
     },
     {
       $set: {
+        purpose,
         codeHash,
         expiresAt,
         attempts: 0,
@@ -81,24 +81,16 @@ export async function createTwoFactorChallenge(
   };
 }
 
-/**
- * Resend an OTP for an existing challenge.
- *
- * The caller is responsible for actually sending the OTP email.
- */
 export async function resendTwoFactorChallenge(
   userId: mongoose.Types.ObjectId,
+  purpose: TwoFactorChallengePurpose,
 ): Promise<TwoFactorResendResult> {
   const challenge = await TwoFactorChallenge.findOne({
     user: userId,
+    purpose,
   }).select("+codeHash");
 
   if (!challenge) {
-    /**
-     * No challenge exists.
-     *
-     * The caller can decide whether to create one.
-     */
     return {
       success: false,
       retryAfterSeconds: 0,

@@ -13,27 +13,30 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 
-type LoginMode = "login" | "twoFactor";
+type LoginMode = "login" | "twoFactor" | "recovery";
 
 export default function LoginPage() {
   const router = useRouter();
 
   const [mode, setMode] = useState<LoginMode>("login");
-
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
   const [challengeId, setChallengeId] = useState("");
-
   const [code, setCode] = useState("");
-
+  const [recoveryCode, setRecoveryCode] = useState("");
   const [error, setError] = useState("");
 
   const [loading, setLoading] = useState(false);
+
+  const [resendAvailableAt, setResendAvailableAt] = useState<number | null>(
+    null,
+  );
+  const [resendCountdown, setResendCountdown] = useState(0);
+  const [resending, setResending] = useState(false);
 
   /**
    * Prevent the OTP field from accepting
@@ -43,6 +46,17 @@ export default function LoginPage() {
     const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
 
     setCode(digitsOnly);
+  }
+
+  function handleRecoveryCodeChange(value: string) {
+    const normalized = value
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .slice(0, 16)
+      .toUpperCase();
+
+    const groups = normalized.match(/.{1,4}/g) ?? [];
+
+    setRecoveryCode(groups.join("-"));
   }
 
   /**
@@ -99,6 +113,11 @@ export default function LoginPage() {
         }
 
         setChallengeId(data.challengeId);
+        setResendAvailableAt(
+          data.resendAvailableAt
+            ? new Date(data.resendAvailableAt).getTime()
+            : null,
+        );
         setMode("twoFactor");
         setCode("");
 
@@ -199,16 +218,195 @@ export default function LoginPage() {
   }
 
   /**
+   * ----------------------------------------
+   * Resend 2FA code
+   * ----------------------------------------
+   */
+  async function handleResendTwoFactor() {
+    if (loading || resending) {
+      return;
+    }
+
+    if (!challengeId) {
+      setError(
+        "Your verification request is no longer valid. Please sign in again.",
+      );
+
+      return;
+    }
+
+    if (resendCountdown > 0) {
+      return;
+    }
+
+    setError("");
+    setResending(true);
+
+    try {
+      const response = await fetch("/api/auth/2fa/resend", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          challengeId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        if (
+          response.status === 429 &&
+          typeof data.retryAfterSeconds === "number"
+        ) {
+          setResendAvailableAt(Date.now() + data.retryAfterSeconds * 1000);
+        }
+
+        setError(data.message || "Unable to resend the verification code.");
+
+        return;
+      }
+
+      /**
+       * The server may return the same challenge ID,
+       * but we use the response value as the source of truth.
+       */
+      if (data.challengeId) {
+        setChallengeId(data.challengeId);
+      }
+
+      setCode("");
+
+      if (data.resendAvailableAt) {
+        setResendAvailableAt(new Date(data.resendAvailableAt).getTime());
+      }
+
+      toast.success("A new verification code has been sent.");
+    } catch (error) {
+      console.error("2FA resend request failed:", error);
+
+      setError(
+        "Something went wrong. Please check your connection and try again.",
+      );
+    } finally {
+      setResending(false);
+    }
+  }
+
+  /**
    * Return from OTP verification to normal login.
    */
   function handleBackToLogin() {
-    if (loading) return;
+    if (loading || resending) {
+      return;
+    }
 
     setMode("login");
     setChallengeId("");
     setCode("");
+    setRecoveryCode("");
     setError("");
+    setResendAvailableAt(null);
+    setResendCountdown(0);
   }
+
+  async function handleRecoveryCodeVerification(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    if (loading) return;
+
+    setError("");
+
+    if (!challengeId) {
+      setError(
+        "Your verification request is no longer valid. Please sign in again.",
+      );
+
+      return;
+    }
+
+    const normalizedCode = recoveryCode.replace(/-/g, "");
+
+    if (normalizedCode.length !== 16) {
+      setError("Please enter a valid recovery code.");
+
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/auth/2fa/recovery/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          challengeId,
+          recoveryCode,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setError(
+          data.message ||
+            "Unable to verify the recovery code. Please try again.",
+        );
+
+        return;
+      }
+
+      /**
+       * Recovery code verification succeeded.
+       *
+       * The backend has created the authenticated
+       * session cookie.
+       */
+      router.push("/dashboard");
+      router.refresh();
+    } catch (error) {
+      console.error("Recovery code verification request failed:", error);
+
+      setError(
+        "Something went wrong. Please check your connection and try again.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (mode !== "twoFactor" || resendAvailableAt === null) {
+      setResendCountdown(0);
+      return;
+    }
+
+    const targetTime = resendAvailableAt;
+
+    function updateCountdown() {
+      const remaining = Math.max(
+        0,
+        Math.ceil((targetTime - Date.now()) / 1000),
+      );
+
+      setResendCountdown(remaining);
+    }
+
+    updateCountdown();
+
+    const interval = window.setInterval(updateCountdown, 1000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [mode, resendAvailableAt]);
 
   return (
     <main className="min-h-screen bg-[var(--background)] text-white">
@@ -406,7 +604,7 @@ export default function LoginPage() {
                   </button>
                 </form>
               </>
-            ) : (
+            ) : mode === "twoFactor" ? (
               <>
                 {/* 2FA heading */}
                 <div className="mb-8">
@@ -480,6 +678,42 @@ export default function LoginPage() {
                     )}
                   </button>
 
+                  <div className="flex items-center justify-center gap-1.5 text-[11px]">
+                    <span className="text-[var(--muted)]">
+                      Didn't receive the code?
+                    </span>
+
+                    {resendCountdown > 0 ? (
+                      <span className="font-medium text-[var(--muted)]">
+                        Resend in {resendCountdown}s
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResendTwoFactor}
+                        disabled={loading || resending}
+                        className="font-medium text-[var(--primary)] transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {resending ? "Sending..." : "Resend Code"}
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (loading || resending) return;
+
+                      setMode("recovery");
+                      setRecoveryCode("");
+                      setError("");
+                    }}
+                    disabled={loading || resending}
+                    className="text-[11px] font-medium text-[var(--primary)] transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Use a recovery code
+                  </button>
+
                   <button
                     type="button"
                     onClick={handleBackToLogin}
@@ -502,6 +736,116 @@ export default function LoginPage() {
                     Never share your verification code with anyone. ClientVault
                     will never ask you to provide this code outside of the
                     sign-in process.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Recovery heading */}
+                <div className="mb-8">
+                  <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--primary-soft)]">
+                    <KeyRound size={18} className="text-[var(--primary)]" />
+                  </div>
+
+                  <h2 className="text-[26px] font-semibold tracking-tight">
+                    Use a recovery code
+                  </h2>
+
+                  <p className="mt-2 text-[12px] leading-5 text-[var(--muted)]">
+                    Enter one of your saved recovery codes to complete your
+                    sign-in.
+                  </p>
+                </div>
+
+                {/* Error */}
+                {error && (
+                  <div
+                    role="alert"
+                    className="mb-5 rounded-lg border border-red-500/20 bg-red-500/5 px-3.5 py-3 text-[11px] leading-5 text-red-400"
+                  >
+                    {error}
+                  </div>
+                )}
+
+                {/* Recovery code form */}
+                <form
+                  onSubmit={handleRecoveryCodeVerification}
+                  className="space-y-5"
+                >
+                  <div>
+                    <label
+                      htmlFor="recovery-code"
+                      className="mb-2 block text-[11px] font-medium text-[var(--muted)]"
+                    >
+                      Recovery Code
+                    </label>
+
+                    <input
+                      id="recovery-code"
+                      name="recovery-code"
+                      type="text"
+                      inputMode="text"
+                      autoComplete="off"
+                      maxLength={19}
+                      placeholder="ABCD-2345-EFGH-6789"
+                      value={recoveryCode}
+                      onChange={(event) =>
+                        handleRecoveryCodeChange(event.target.value)
+                      }
+                      disabled={loading}
+                      autoFocus
+                      required
+                      className="h-12 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 text-center text-[15px] font-semibold tracking-[0.12em] text-white outline-none placeholder:text-[var(--muted)] transition focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={
+                      loading || recoveryCode.replace(/-/g, "").length !== 16
+                    }
+                    className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] text-[12px] font-semibold text-black transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {loading ? (
+                      <>
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black" />
+                        Verifying...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={15} />
+                        Verify Recovery Code
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (loading) return;
+
+                      setMode("twoFactor");
+                      setRecoveryCode("");
+                      setError("");
+                    }}
+                    disabled={loading}
+                    className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] text-[11px] font-medium text-[var(--muted)] transition hover:bg-[var(--card)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ArrowLeft size={14} />
+                    Back to verification code
+                  </button>
+                </form>
+
+                {/* Recovery note */}
+                <div className="mt-8 flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3.5">
+                  <ShieldCheck
+                    size={16}
+                    className="mt-0.5 shrink-0 text-[var(--primary)]"
+                  />
+
+                  <p className="text-[10px] leading-5 text-[var(--muted)]">
+                    Each recovery code can only be used once. Keep your
+                    remaining recovery codes stored in a secure location.
                   </p>
                 </div>
               </>

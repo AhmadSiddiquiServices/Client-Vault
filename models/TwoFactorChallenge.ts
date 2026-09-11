@@ -1,12 +1,13 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
+export type TwoFactorChallengePurpose = "login" | "enable";
 
 export interface ITwoFactorChallenge extends Document {
   user: mongoose.Types.ObjectId;
 
+  purpose: TwoFactorChallengePurpose;
+
   /**
    * HMAC hash of the OTP.
-   *
-   * Never store the plaintext OTP.
    */
   codeHash: string;
 
@@ -27,8 +28,6 @@ export interface ITwoFactorChallenge extends Document {
 
   /**
    * Timestamp of the most recent OTP send/resend.
-   *
-   * Used for resend cooldown enforcement.
    */
   lastSentAt: Date;
 
@@ -47,7 +46,13 @@ const TwoFactorChallengeSchema = new Schema<ITwoFactorChallenge>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      unique: true,
+      index: true,
+    },
+
+    purpose: {
+      type: String,
+      enum: ["login", "enable"],
+      required: true,
       index: true,
     },
 
@@ -92,17 +97,19 @@ const TwoFactorChallengeSchema = new Schema<ITwoFactorChallenge>(
   },
 );
 
-/**
- * Automatically remove expired challenges.
- *
- * MongoDB TTL cleanup is not our security mechanism.
- * Verification code will still explicitly check expiresAt.
- */
 TwoFactorChallengeSchema.index(
   { expiresAt: 1 },
   {
     expireAfterSeconds: 0,
     name: "two_factor_challenge_expiration",
+  },
+);
+
+TwoFactorChallengeSchema.index(
+  { user: 1, purpose: 1 },
+  {
+    unique: true,
+    name: "two_factor_challenge_user_purpose_unique",
   },
 );
 

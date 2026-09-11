@@ -2,7 +2,17 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { connectToDatabase } from "@/lib/mongodb";
-import { createSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import {
+  createSessionToken,
+  SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+} from "@/lib/auth/session";
+
+import { createDatabaseSession } from "@/lib/auth/create-session";
+import {
+  getRequestIpAddress,
+  getRequestUserAgent,
+} from "@/lib/auth/request-info";
 import { verifyPassword } from "@/lib/auth/password";
 import { createTwoFactorChallenge } from "@/lib/auth/two-factor";
 import { sendTwoFactorOtp } from "@/lib/email/send-two-factor-otp";
@@ -119,7 +129,7 @@ export async function POST(request: Request) {
      * The user must complete OTP verification first.
      */
     if (twoFactorEnabled) {
-      const challenge = await createTwoFactorChallenge(user._id);
+      const challenge = await createTwoFactorChallenge(user._id, "login");
 
       try {
         await sendTwoFactorOtp({
@@ -156,7 +166,11 @@ export async function POST(request: Request) {
           success: true,
           requiresTwoFactor: true,
           challengeId: challenge.challengeId,
+          expiresAt: challenge.expiresAt,
+          resendAvailableAt: challenge.resendAvailableAt,
+
           message: "A verification code has been sent to your email.",
+
           user: {
             name: user.name,
             email: user.email,
@@ -178,9 +192,21 @@ export async function POST(request: Request) {
     await user.save();
 
     /**
-     * Create signed session token.
+     * Create a database-backed session.
      */
-    const sessionToken = await createSessionToken(user._id.toString());
+    const session = await createDatabaseSession({
+      userId: user._id.toString(),
+      userAgent: getRequestUserAgent(request),
+      ipAddress: getRequestIpAddress(request),
+    });
+
+    /**
+     * Create signed JWT containing the database session ID.
+     */
+    const sessionToken = await createSessionToken(
+      user._id.toString(),
+      session.sessionId,
+    );
 
     const response = NextResponse.json(
       {
@@ -206,7 +232,7 @@ export async function POST(request: Request) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: SESSION_MAX_AGE_SECONDS,
     });
 
     return response;
